@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Smart Dialer</string>
+    <string name="tab_keypad">Keypad</string>
+    <string name="tab_recents">Recents</string>
+    <string name="tab_contacts">Contacts</string>
+    <string name="tab_protection">Spam Shield</string>
+    <string name="tab_analytics">Analytics</string>
+    <string name="search_hint">Search name, number or T9...</string>
+    <string name="call_blocked">Call Blocked</string>
+    <string name="spam_warning">Potential Spam</string>
+    <string name="verified_caller">Verified Caller</string>
+</resources>

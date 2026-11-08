@@ -1,0 +1,6 @@
+{
+  "name": "Smart Dialer",
+  "description": "Smart Dialer & Caller ID with real-time caller lookup, spam detection, T9 keypad, call logs, and call blocking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
