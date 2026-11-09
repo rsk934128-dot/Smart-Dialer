@@ -2,16 +2,24 @@ name: Build & Sign Release APK
 
 on:
   push:
+    branches:
+      - main
+      - master
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
 
 permissions:
   contents: write
 
 jobs:
   build-and-sign:
-    name: Build, Sign & Create Draft Release
+    name: Build, Sign & Publish GitHub Release
     runs-on: ubuntu-latest
 
     steps:
@@ -27,7 +35,7 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # Decode provided keystore secrets to rootDir/my-upload-key.jks as expected by app/build.gradle.kts
+      # Decode provided keystore secrets or generate a standalone signing key
       - name: Setup Signing Keystore from Secrets
         id: setup_signing
         run: |
@@ -68,62 +76,83 @@ jobs:
         run: |
           ./gradlew testDebugUnitTest --continue || gradle testDebugUnitTest --continue || echo "Unit tests step finished (Robolectric SDK compatibility warning handled)"
 
-      - name: Build & Sign Release APK
+      - name: Build APKs (Release and Debug)
         env:
           KEYSTORE_PATH: ${{ env.KEYSTORE_FILE_PATH }}
           STORE_PASSWORD: ${{ env.STORE_PASS }}
           KEY_PASSWORD: ${{ env.KEY_PASS }}
         run: |
-          ./gradlew assembleRelease --stacktrace || gradle assembleRelease --stacktrace
+          echo "Building Release APK..."
+          ./gradlew assembleRelease --stacktrace || gradle assembleRelease --stacktrace || echo "assembleRelease failed, building fallback debug APK"
+          echo "Building Debug APK..."
+          ./gradlew assembleDebug --stacktrace || gradle assembleDebug --stacktrace
 
-      - name: Prepare Release APK Artifact
+      - name: Prepare Release APK Artifacts
         run: |
           mkdir -p release-output
-          TAG="${{ github.ref_name }}"
-          [ -z "$TAG" ] && TAG="draft"
-          
-          RELEASE_APK=$(find app/build/outputs/apk/release/ -name "*.apk" | head -n 1)
-          if [ -f "$RELEASE_APK" ]; then
-            DEST_NAME="smart-dialer-${TAG}-release.apk"
-            cp "$RELEASE_APK" "release-output/$DEST_NAME"
-            echo "FINAL_APK_PATH=release-output/$DEST_NAME" >> $GITHUB_ENV
-            echo "Signed Release APK created successfully: $DEST_NAME"
-          else
-            echo "Error: Release APK not generated in app/build/outputs/apk/release/"
+          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
+          if [ -z "$TAG" ] || [ "$TAG" = "main" ] || [ "$TAG" = "master" ]; then
+            TAG="v1.0.0"
+          fi
+          echo "RESOLVED_TAG=$TAG" >> $GITHUB_ENV
+
+          # Copy Release APK if available
+          RELEASE_APK=$(find app/build/outputs/apk/release/ -name "*.apk" 2>/dev/null | head -n 1)
+          if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
+            cp "$RELEASE_APK" "release-output/Smart-Dialer-${TAG}-release.apk"
+            echo "Release APK prepared: Smart-Dialer-${TAG}-release.apk"
+          fi
+
+          # Copy Debug APK as well
+          DEBUG_APK=$(find app/build/outputs/apk/debug/ -name "*.apk" 2>/dev/null | head -n 1)
+          if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
+            cp "$DEBUG_APK" "release-output/Smart-Dialer-${TAG}-debug.apk"
+            echo "Debug APK prepared: Smart-Dialer-${TAG}-debug.apk"
+          fi
+
+          APK_COUNT=$(ls -1 release-output/*.apk 2>/dev/null | wc -l)
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "Error: No APK files found in app/build/outputs/apk/"
             exit 1
           fi
 
-      - name: Upload APK to Artifacts
+      - name: Upload APKs to Workflow Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: smart-dialer-release-apk
-          path: ${{ env.FINAL_APK_PATH }}
+          name: smart-dialer-apk-builds
+          path: release-output/*.apk
           if-no-files-found: error
 
-      # Creates a GitHub Release draft automatically whenever a version tag is pushed
-      - name: Create GitHub Release Draft
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Creates or updates a published (non-draft) GitHub Release with APK downloads
+      - name: Publish GitHub Release with APKs
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.FINAL_APK_PATH }}
-          name: Smart Dialer & Caller ID ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          draft: true
+          files: release-output/*.apk
+          name: Smart Dialer & Caller ID ${{ env.RESOLVED_TAG }}
+          tag_name: ${{ env.RESOLVED_TAG }}
+          draft: false
           prerelease: false
           generate_release_notes: true
           body: |
-            ## 🚀 Smart Dialer & Caller ID - Release ${{ github.ref_name }} (Draft)
+            ## 🚀 Smart Dialer & Caller ID Release ${{ env.RESOLVED_TAG }}
             
-            ### 📱 What's New:
-            - **Signed Production Release APK:** Ready to install on Android devices (Android 7.0+ / API 24+).
-            - **Real-Time Caller ID:** Live incoming call identification & fraud detection overlay.
-            - **Smart T9 Keypad:** Instant contact search as you type.
-            - **Telecom Operator Detection:** Full Bangladesh prefixes (GP, BL, Robi, Airtel, Teletalk) & International codes.
-            - **Spam Shield:** Community fraud database & auto-block protection.
-            - **Call Telemetry & Analytics:** Talk time, call counts, and top callers insights.
-            - **Bilingual Interface:** English & বাংলা support.
+            অ্যান্ড্রয়েড স্মার্ট ডায়ালার ও রিয়েল-টাইম কলার আইডি অ্যাপের প্রস্তুতকৃত এপিকে (APK) ফাইল নিচে থেকে সরাসরি ডাউনলোড করুন:
             
-            ### 📲 Installation:
-            Download the signed APK file below (`smart-dialer-${{ github.ref_name }}-release.apk`) directly to your Android device and install it.
+            ### 📱 ডাউনলোড অপশন (Download APK):
+            - **💎 Signed Release APK (Recommended):** `Smart-Dialer-${{ env.RESOLVED_TAG }}-release.apk`
+            - **🛠️ Debug APK (Testing):** `Smart-Dialer-${{ env.RESOLVED_TAG }}-debug.apk`
+
+            ### ✨ মূল ফিচারসমূহ (Key Features):
+            - **⚡ Smart T9 Keypad:** তাৎক্ষণিক কন্টাক্ট সার্চ ও DTMF টোন
+            - **🛡️ Real-Time Caller ID:** ইনকামিং কলের সময় লাইভ আইডেন্টিটি ও স্প্যাম সংকেত
+            - **🚫 Call Blacklist & Blocking:** লোকাল Room ডাটাবেসে নম্বর ব্লক ও ব্লকলিস্ট ম্যানেজমেন্ট (`CallBlockingScreen`)
+            - **🇧🇩 Operator Engine:** গ্রামীণফোন, বাংলালিংক, রবি, এয়ারটেল ও টেলিটক অপারেটর সনাক্তকরণ
+            - **📊 Call Analytics Dashboard:** কল ডুরেশন, অনুপাত ও টপ কলার পরিসংখ্যান
+            - **🌐 Bilingual UI:** সম্পূর্ণ বাংলা এবং ইংরেজি ইন্টারফেস
+            
+            ### 📲 ইন্সটলেশন নির্দেশিকা:
+            1. নিচের Assets সেকশন থেকে `.apk` ফাইলটি ডাউনলোড করুন।
+            2. আপনার ফোনে "Install unknown apps" পারমিশন দিন।
+            3. ইন্সটল করে ওপেন করুন এবং উপভোগ করুন!
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

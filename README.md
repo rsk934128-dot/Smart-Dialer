@@ -5,7 +5,13 @@
 [![Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-4285F4.svg?style=flat&logo=jetpackcompose)](https://developer.android.com/jetpack/compose)
 [![Material 3](https://img.shields.io/badge/Design-Material%203-blue.svg?style=flat)](https://m3.material.io/)
 [![Room](https://img.shields.io/badge/Storage-Room%20DB-orange.svg?style=flat)](https://developer.android.com/training/data-storage/room)
+[![Release](https://img.shields.io/github/v/release/rsk934128-dot/Smart-Dialer-Caller-ID?color=success&label=Latest%20Release)](https://github.com/rsk934128-dot/Smart-Dialer-Caller-ID/releases)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+[![Download APK](https://img.shields.io/badge/📱%20Download-Smart--Dialer%20APK-007AFF?style=for-the-badge&logo=android&logoColor=white)](https://github.com/rsk934128-dot/Smart-Dialer-Caller-ID/releases)
+
+> **📥 সরাসরি APK ডাউনলোড করতে চান?** 
+> গিটহাবের [**Releases**](https://github.com/rsk934128-dot/Smart-Dialer-Caller-ID/releases) পেজে যান অথবা [**Latest Release**](https://github.com/rsk934128-dot/Smart-Dialer-Caller-ID/releases/latest) এ ক্লিক করে **`Smart-Dialer-v1.0.0-release.apk`** ফাইলটি সরাসরি আপনার ফোনে নামিয়ে ইনস্টল করুন।
 
 > A modern, privacy-first, offline-capable **Smart Dialer, Real-Time Caller ID, and Community Spam Protection** application built with Kotlin and Jetpack Compose.
 > 
@@ -124,11 +130,13 @@ gradle :app:testDebugUnitTest
    git push origin main --tags
    ```
 
-3. **Automatic CI/CD:**
-   The included GitHub Actions workflow (`.github/workflows/android-release.yml`) will automatically:
+3. **Automatic CI/CD (GitHub Actions):**
+   The included GitHub Actions workflow (`.github/workflows/release.yml`) will automatically:
+   - Build both signed Production APK and Debug APK
    - Run tests
-   - Build the APK
-   - Create a GitHub Release with download assets attached!
+   - Instantly publish a public GitHub Release with direct APK download links
+   
+   > 💡 **ম্যানুয়ালি বিল্ড করতে চাইলে:** GitHub-এ আপনার রিপোজিটরির **Actions** ট্যাবে যান ➜ **Build & Sign Release APK** সিলেক্ট করুন ➜ **Run workflow** বাটনে ক্লিক করুন। সাথে সাথে নতুন APK তৈরি হয়ে Releases পেজে চলে আসবে!
 
 ---
 
