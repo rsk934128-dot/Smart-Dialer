@@ -71,8 +71,11 @@ android {
 }
 
 tasks.withType<Test>().configureEach {
-  systemProperty("robolectric.offline", "true")
-  systemProperty("robolectric.dependency.dir", "/home/appuser/.robolectric-jars")
+  val offlineDir = file("/home/appuser/.m2/repository/org/robolectric/android-all-instrumented/16-robolectric-13921718-i7")
+  if (offlineDir.exists()) {
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", offlineDir.absolutePath)
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files

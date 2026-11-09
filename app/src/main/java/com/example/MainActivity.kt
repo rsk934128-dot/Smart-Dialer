@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.History
@@ -67,6 +68,7 @@ import androidx.core.content.ContextCompat
 import com.example.ui.components.ActiveCallDialog
 import com.example.ui.components.CallerIdOverlayDialog
 import com.example.ui.screens.AnalyticsScreen
+import com.example.ui.screens.CallBlockingScreen
 import com.example.ui.screens.ContactsScreen
 import com.example.ui.screens.DialerScreen
 import com.example.ui.screens.RecentsScreen
@@ -107,6 +109,7 @@ fun MainAppContent(viewModel: DialerViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     var showAboutDialog by remember { mutableStateOf(false) }
+    var showCallBlockingScreen by remember { mutableStateOf(false) }
 
     // Request necessary telephony & contact permissions gracefully
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -139,9 +142,11 @@ fun MainAppContent(viewModel: DialerViewModel) {
         }
     }
 
-    // Back handling: pop input or return to keypad
-    BackHandler(enabled = currentTab != AppTab.KEYPAD || inputNumber.isNotEmpty()) {
-        if (inputNumber.isNotEmpty()) {
+    // Back handling: close call blocking, pop input, or return to keypad
+    BackHandler(enabled = showCallBlockingScreen || currentTab != AppTab.KEYPAD || inputNumber.isNotEmpty()) {
+        if (showCallBlockingScreen) {
+            showCallBlockingScreen = false
+        } else if (inputNumber.isNotEmpty()) {
             viewModel.clearInput()
         } else if (currentTab != AppTab.KEYPAD) {
             viewModel.selectTab(AppTab.KEYPAD)
@@ -211,6 +216,18 @@ fun MainAppContent(viewModel: DialerViewModel) {
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
+                    }
+
+                    // Call Blacklist Manager quick action
+                    IconButton(
+                        onClick = { showCallBlockingScreen = true },
+                        modifier = Modifier.testTag("btn_top_blacklist")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Block,
+                            contentDescription = "Call Blacklist",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     // Architecture & Info dialog trigger
@@ -296,11 +313,22 @@ fun MainAppContent(viewModel: DialerViewModel) {
                     AppTab.KEYPAD -> DialerScreen(viewModel = viewModel)
                     AppTab.RECENTS -> RecentsScreen(viewModel = viewModel)
                     AppTab.CONTACTS -> ContactsScreen(viewModel = viewModel)
-                    AppTab.SPAM_SHIELD -> SpamShieldScreen(viewModel = viewModel)
+                    AppTab.SPAM_SHIELD -> SpamShieldScreen(
+                        viewModel = viewModel,
+                        onNavigateToCallBlocking = { showCallBlockingScreen = true }
+                    )
                     AppTab.ANALYTICS -> AnalyticsScreen(viewModel = viewModel)
                 }
             }
         }
+    }
+
+    // Full-screen Dedicated Call Blocking & Blacklist View
+    if (showCallBlockingScreen) {
+        CallBlockingScreen(
+            viewModel = viewModel,
+            onNavigateBack = { showCallBlockingScreen = false }
+        )
     }
 
     // Active Call Dialog Overlay (Triggered during outgoing or answered call)

@@ -64,7 +64,8 @@ import com.example.util.CarrierLookupEngine
 @Composable
 fun SpamShieldScreen(
     viewModel: DialerViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onNavigateToCallBlocking: (() -> Unit)? = null
 ) {
     val spamReports by viewModel.spamReports.collectAsState()
     val blockedNumbers by viewModel.blockedNumbers.collectAsState()
@@ -269,31 +270,78 @@ fun SpamShieldScreen(
             }
         }
 
-        // Action: Report Spam Number Button
+        // Action: Report Spam Number & Manage Blacklist Buttons
         item {
-            Button(
-                onClick = { showReportModal = true },
-                colors = ButtonDefaults.buttonColors(containerColor = SpamRed),
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("btn_open_report_spam")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.ReportProblem, contentDescription = "Report", modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(if (language == AppLanguage.BENGALI) "নতুন স্প্যাম নম্বর রিপোর্ট করুন" else "Report a Spam / Scammer Number")
+                Button(
+                    onClick = { showReportModal = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = SpamRed),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("btn_open_report_spam")
+                ) {
+                    Icon(Icons.Default.ReportProblem, contentDescription = "Report", modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (language == AppLanguage.BENGALI) "রিপোর্ট স্প্যাম" else "Report Spam",
+                        fontSize = 12.sp
+                    )
+                }
+
+                if (onNavigateToCallBlocking != null) {
+                    Button(
+                        onClick = onNavigateToCallBlocking,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("btn_open_call_blocking")
+                    ) {
+                        Icon(Icons.Default.Block, contentDescription = "Blacklist", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "ব্লকলিস্ট ম্যানেজার" else "Call Blacklist",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
 
-        // Currently Blocked Numbers List
+        // Currently Blocked Numbers List Header
         item {
-            Text(
-                text = if (language == AppLanguage.BENGALI) "ব্লক করা নম্বরসমূহ (${blockedNumbers.size})" else "BLOCKED NUMBERS (${blockedNumbers.size})",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                letterSpacing = 1.sp
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (language == AppLanguage.BENGALI) "ব্লক করা নম্বরসমূহ (${blockedNumbers.size})" else "BLOCKED NUMBERS (${blockedNumbers.size})",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    letterSpacing = 1.sp
+                )
+                if (onNavigateToCallBlocking != null && blockedNumbers.isNotEmpty()) {
+                    OutlinedButton(
+                        onClick = onNavigateToCallBlocking,
+                        modifier = Modifier.testTag("btn_view_all_blocked")
+                    ) {
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "সব দেখুন" else "Manage All",
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
         }
 
         if (blockedNumbers.isEmpty()) {

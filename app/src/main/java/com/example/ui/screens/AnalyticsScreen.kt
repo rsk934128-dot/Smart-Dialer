@@ -17,11 +17,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallMissed
+import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CallMade
-import androidx.compose.material.icons.filled.CallMissed
-import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Timer
@@ -170,7 +170,7 @@ fun AnalyticsScreen(
                         title = if (language == AppLanguage.BENGALI) "মিসড কল" else "Missed Calls",
                         value = missedCalls.toString(),
                         subtitle = "Unanswered calls",
-                        icon = Icons.Default.CallMissed,
+                        icon = Icons.AutoMirrored.Filled.CallMissed,
                         tint = WarningAmber,
                         modifier = Modifier.weight(1f)
                     )

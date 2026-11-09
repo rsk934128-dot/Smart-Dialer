@@ -22,10 +22,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -366,7 +366,7 @@ fun CallerIdOverlayDialog(
                                 .testTag("caller_id_sms")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Message,
+                                imageVector = Icons.AutoMirrored.Filled.Message,
                                 contentDescription = "Quick SMS",
                                 modifier = Modifier.size(24.dp)
                             )
