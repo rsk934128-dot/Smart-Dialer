@@ -174,4 +174,50 @@ class CallLogAndSpamRobolectricTest {
         assertEquals(SpamRiskLevel.SAFE, lookup.riskLevel)
         assertEquals("Grameenphone", lookup.carrierName)
     }
+
+    @Test
+    fun testDefaultDialerManager() {
+        val isDefault = com.example.util.DefaultDialerManager.isDefaultDialer(context)
+        // In Robolectric environment, default is false
+        assertFalse(isDefault)
+
+        val intent = com.example.util.DefaultDialerManager.createDefaultDialerIntent(context)
+        assertNotNull(intent)
+        assertNotNull(intent.action)
+
+        val settingsIntent = com.example.util.DefaultDialerManager.createDefaultAppsSettingsIntent(context)
+        assertNotNull(settingsIntent)
+        assertNotNull(settingsIntent.action)
+
+        val overlayIntent = com.example.util.DefaultDialerManager.createOverlayPermissionIntent(context)
+        assertNotNull(overlayIntent)
+        assertEquals(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, overlayIntent.action)
+        assertEquals("package:${context.packageName}", overlayIntent.dataString)
+    }
+
+    @Test
+    fun testCallStateAnsweredAndDuration() {
+        // Initial state
+        val state = com.example.ui.viewmodel.ActiveCallState(
+            isActive = true,
+            isIncomingRinging = false,
+            isCallAnswered = false,
+            durationSeconds = 0
+        )
+        assertFalse(state.isCallAnswered)
+        assertEquals(0L, state.durationSeconds)
+
+        // After call is answered/received:
+        val answeredState = state.copy(
+            isCallAnswered = true,
+            durationSeconds = 12
+        )
+        assertTrue(answeredState.isCallAnswered)
+        assertEquals(12L, answeredState.durationSeconds)
+
+        // Test CallStateManager event emission
+        com.example.service.CallStateManager.emit(
+            com.example.service.CallStateEvent.CallAnswered
+        )
+    }
 }

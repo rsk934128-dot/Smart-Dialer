@@ -51,10 +51,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.SpamRiskLevel
 import com.example.ui.theme.CallGreen
 import com.example.ui.theme.Navy900
@@ -63,10 +62,12 @@ import com.example.ui.theme.SpamRed
 import com.example.ui.theme.VerifiedTeal
 import com.example.ui.theme.WarningAmber
 import com.example.ui.viewmodel.ActiveCallState
+import com.example.ui.viewmodel.AppLanguage
 
 @Composable
 fun CallerIdOverlayDialog(
     callState: ActiveCallState,
+    language: AppLanguage = AppLanguage.ENGLISH,
     onAccept: () -> Unit,
     onDecline: () -> Unit,
     onBlockAndReport: () -> Unit,
@@ -86,17 +87,13 @@ fun CallerIdOverlayDialog(
         label = "pulseScale"
     )
 
-    Dialog(
-        onDismissRequest = { /* Don't dismiss by outside touch */ },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false
-        )
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
+    BackHandler(enabled = true) {
+        onDecline()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         colors = if (callState.isSpam) {
@@ -144,9 +141,9 @@ fun CallerIdOverlayDialog(
                         )
                         Text(
                             text = if (callState.isSpam) {
-                                "SPAM WARNING • SMART CALLER ID"
+                                if (language == AppLanguage.BENGALI) "স্প্যাম সতর্কবার্তা • স্মার্ট কলার আইডি" else "SPAM WARNING • SMART CALLER ID"
                             } else {
-                                "VERIFIED CALLER • SMART CALLER ID"
+                                if (language == AppLanguage.BENGALI) "ভেরিফাইড কলার • স্মার্ট কলার আইডি" else "VERIFIED CALLER • SMART CALLER ID"
                             },
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
@@ -349,7 +346,11 @@ fun CallerIdOverlayDialog(
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text("Decline", fontSize = 12.sp, color = Color.White)
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "কেটে দিন" else "Decline",
+                            fontSize = 12.sp,
+                            color = Color.White
+                        )
                     }
 
                     // Quick SMS Button
@@ -372,7 +373,11 @@ fun CallerIdOverlayDialog(
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text("Message", fontSize = 11.sp, color = Color(0xFF94A3B8))
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "মেসেজ" else "Message",
+                            fontSize = 11.sp,
+                            color = Color(0xFF94A3B8)
+                        )
                     }
 
                     // Block & Report Button (If Spam)
@@ -386,8 +391,8 @@ fun CallerIdOverlayDialog(
                                     contentColor = Color.White
                                 ),
                                 modifier = Modifier
-                                    .size(54.dp)
-                                    .testTag("caller_id_block_report")
+                                .size(54.dp)
+                                .testTag("caller_id_block_report")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Block,
@@ -396,7 +401,11 @@ fun CallerIdOverlayDialog(
                                 )
                             }
                             Spacer(modifier = Modifier.height(6.dp))
-                            Text("Block & Report", fontSize = 11.sp, color = SpamRed)
+                            Text(
+                                text = if (language == AppLanguage.BENGALI) "ব্লক ও রিপোর্ট" else "Block & Report",
+                                fontSize = 11.sp,
+                                color = SpamRed
+                            )
                         }
                     }
 
@@ -420,10 +429,14 @@ fun CallerIdOverlayDialog(
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text("Answer", fontSize = 12.sp, color = Color.White)
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "রিসিভ করুন" else "Answer",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
                     }
                 }
             }
         }
-    }
 }

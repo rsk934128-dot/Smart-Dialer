@@ -1,5 +1,11 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,9 +40,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -44,18 +52,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.example.ui.theme.CallGreen
 import com.example.ui.theme.Navy800
 import com.example.ui.theme.Navy900
 import com.example.ui.theme.Navy950
 import com.example.ui.theme.SpamRed
+import com.example.ui.theme.WarningAmber
 import com.example.ui.viewmodel.ActiveCallState
+import com.example.ui.viewmodel.AppLanguage
+
+private fun toBengaliDigits(input: String): String {
+    val en = "0123456789"
+    val bn = "০১২৩৪৫৬৭৮৯"
+    var res = input
+    for (i in en.indices) {
+        res = res.replace(en[i], bn[i])
+    }
+    return res
+}
 
 @Composable
 fun ActiveCallDialog(
     callState: ActiveCallState,
+    language: AppLanguage = AppLanguage.ENGLISH,
     onEndCall: () -> Unit,
     onToggleMute: () -> Unit,
     onToggleSpeaker: () -> Unit,
@@ -64,23 +83,31 @@ fun ActiveCallDialog(
     var showInCallKeypad by remember { mutableStateOf(false) }
     var inCallDtmfText by remember { mutableStateOf("") }
 
-    val formattedDuration = remember(callState.durationSeconds) {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+
+    val formattedDuration = remember(callState.durationSeconds, language) {
         val min = callState.durationSeconds / 60
         val sec = callState.durationSeconds % 60
-        String.format("%02d:%02d", min, sec)
+        val standard = String.format("%02d:%02d", min, sec)
+        if (language == AppLanguage.BENGALI) toBengaliDigits(standard) else standard
     }
 
-    Dialog(
-        onDismissRequest = { /* Must click end call */ },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = false,
-            dismissOnClickOutside = false
-        )
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
+    BackHandler(enabled = true) {
+        // Prevent accidental dismissal via back button during active call; user must press End Call
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
                 .background(Navy950)
                 .padding(24.dp)
                 .testTag("active_call_dialog"),
@@ -93,52 +120,116 @@ fun ActiveCallDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Top status
+                // Top status bar (Call state + Counting Seconds Timer)
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(top = 16.dp)
                 ) {
-                    Text(
-                        text = if (callState.isOnHold) "ON HOLD" else "ACTIVE CALL",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (callState.isOnHold) Color(0xFFF59E0B) else CallGreen,
-                        letterSpacing = 1.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = formattedDuration,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = when {
+                            callState.isOnHold -> WarningAmber.copy(alpha = 0.2f)
+                            callState.isCallAnswered -> CallGreen.copy(alpha = 0.2f)
+                            else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                        }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            // Pulsing dot indicator
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .scale(if (callState.isCallAnswered && !callState.isOnHold) pulseScale else 1f)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            callState.isOnHold -> WarningAmber
+                                            callState.isCallAnswered -> CallGreen
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = when {
+                                    callState.isOnHold -> if (language == AppLanguage.BENGALI) "হোল্ডে আছে (ON HOLD)" else "ON HOLD"
+                                    callState.isCallAnswered -> if (language == AppLanguage.BENGALI) "কল রিসিভ হয়েছে • কথা চলছে" else "CONNECTED • CALL IN PROGRESS"
+                                    else -> if (language == AppLanguage.BENGALI) "রিং হচ্ছে / সংযোগ হচ্ছে..." else "CALLING / RINGING..."
+                                },
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when {
+                                    callState.isOnHold -> WarningAmber
+                                    callState.isCallAnswered -> CallGreen
+                                    else -> MaterialTheme.colorScheme.primary
+                                },
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Prominent Timer Display: starts counting seconds once the call is answered/received!
+                    if (callState.isCallAnswered) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = formattedDuration,
+                                fontSize = 36.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White,
+                                letterSpacing = 2.sp,
+                                modifier = Modifier.testTag("active_call_duration_text")
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (language == AppLanguage.BENGALI)
+                                    "⏱️ মোট সময়: ${toBengaliDigits(callState.durationSeconds.toString())} সেকেন্ড"
+                                else
+                                    "⏱️ Duration: ${callState.durationSeconds}s",
+                                fontSize = 12.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+                    } else {
+                        // Before answer / while dialing
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "রিং হচ্ছে..." else "Ringing...",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFFCBD5E1),
+                            modifier = Modifier.testTag("active_call_ringing_text")
+                        )
+                    }
                 }
 
                 // Avatar / Callee details
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(vertical = 24.dp)
+                    modifier = Modifier.padding(vertical = 20.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(100.dp)
+                            .size(96.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = callState.callerName.take(1).uppercase(),
-                            fontSize = 42.sp,
+                            fontSize = 40.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
                         text = callState.callerName,
-                        fontSize = 26.sp,
+                        fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
                         textAlign = TextAlign.Center
@@ -148,7 +239,7 @@ fun ActiveCallDialog(
 
                     Text(
                         text = callState.number,
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         color = Color(0xFF94A3B8),
                         textAlign = TextAlign.Center
                     )
@@ -175,7 +266,7 @@ fun ActiveCallDialog(
                         shape = RoundedCornerShape(16.dp),
                         color = Navy900,
                         modifier = Modifier
-                            .fillMaxWidth(0.85f)
+                            .fillMaxWidth(0.95f)
                             .padding(bottom = 12.dp)
                     ) {
                         Column(
@@ -183,16 +274,40 @@ fun ActiveCallDialog(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "DTMF Tones: $inCallDtmfText",
-                                color = Color.White,
+                                text = inCallDtmfText.ifEmpty { if (language == AppLanguage.BENGALI) "ডায়াল করুন" else "Dial numbers" },
                                 fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(bottom = 8.dp)
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            KeypadMatrix(
-                                onDigitClick = { inCallDtmfText += it },
-                                onLongDigitClick = { inCallDtmfText += it }
+                            val keypadKeys = listOf(
+                                listOf("1", "2", "3"),
+                                listOf("4", "5", "6"),
+                                listOf("7", "8", "9"),
+                                listOf("*", "0", "#")
                             )
+                            keypadKeys.forEach { row ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly
+                                ) {
+                                    row.forEach { digit ->
+                                        FilledIconButton(
+                                            onClick = { inCallDtmfText += digit },
+                                            shape = CircleShape,
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = Navy800,
+                                                contentColor = Color.White
+                                            ),
+                                            modifier = Modifier
+                                                .padding(3.dp)
+                                                .size(46.dp)
+                                        ) {
+                                            Text(digit, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -208,21 +323,25 @@ fun ActiveCallDialog(
                     ) {
                         InCallControlButton(
                             icon = if (callState.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                            label = if (callState.isMuted) "Unmute" else "Mute",
+                            label = if (language == AppLanguage.BENGALI) {
+                                if (callState.isMuted) "আনমিউট" else "মিউট"
+                            } else {
+                                if (callState.isMuted) "Unmute" else "Mute"
+                            },
                             isActive = callState.isMuted,
                             onClick = onToggleMute,
                             testTag = "incall_mute"
                         )
                         InCallControlButton(
                             icon = Icons.Default.Dialpad,
-                            label = "Keypad",
+                            label = if (language == AppLanguage.BENGALI) "কীপ্যাড" else "Keypad",
                             isActive = showInCallKeypad,
                             onClick = { showInCallKeypad = !showInCallKeypad },
                             testTag = "incall_keypad"
                         )
                         InCallControlButton(
                             icon = Icons.AutoMirrored.Filled.VolumeUp,
-                            label = "Speaker",
+                            label = if (language == AppLanguage.BENGALI) "স্পিকার" else "Speaker",
                             isActive = callState.isSpeakerOn,
                             onClick = onToggleSpeaker,
                             testTag = "incall_speaker"
@@ -235,7 +354,11 @@ fun ActiveCallDialog(
                     ) {
                         InCallControlButton(
                             icon = if (callState.isOnHold) Icons.Default.PlayArrow else Icons.Default.Pause,
-                            label = if (callState.isOnHold) "Resume" else "Hold",
+                            label = if (language == AppLanguage.BENGALI) {
+                                if (callState.isOnHold) "চালু করুন" else "হোল্ড"
+                            } else {
+                                if (callState.isOnHold) "Resume" else "Hold"
+                            },
                             isActive = callState.isOnHold,
                             onClick = onToggleHold,
                             testTag = "incall_hold"
@@ -250,29 +373,36 @@ fun ActiveCallDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
                 // Big Red End Call Button
-                FilledIconButton(
-                    onClick = onEndCall,
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = SpamRed,
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier
-                        .size(76.dp)
-                        .testTag("incall_end_call")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CallEnd,
-                        contentDescription = "End Call",
-                        modifier = Modifier.size(36.dp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FilledIconButton(
+                        onClick = onEndCall,
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = SpamRed,
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier
+                            .size(76.dp)
+                            .testTag("incall_end_call")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CallEnd,
+                            contentDescription = "End Call",
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (language == AppLanguage.BENGALI) "কল কাটুন" else "End Call",
+                        fontSize = 12.sp,
+                        color = Color(0xFFCBD5E1)
                     )
                 }
             }
         }
-    }
 }
 
 @Composable

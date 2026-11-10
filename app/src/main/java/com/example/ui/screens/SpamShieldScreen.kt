@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,10 +16,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
@@ -48,10 +53,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.example.data.model.SpamRiskLevel
 import com.example.ui.theme.CallGreen
 import com.example.ui.theme.SpamRed
@@ -60,6 +68,7 @@ import com.example.ui.theme.WarningAmber
 import com.example.ui.viewmodel.AppLanguage
 import com.example.ui.viewmodel.DialerViewModel
 import com.example.util.CarrierLookupEngine
+import com.example.util.DefaultDialerManager
 
 @Composable
 fun SpamShieldScreen(
@@ -80,6 +89,45 @@ fun SpamShieldScreen(
     var showCallerIdOverlay by remember { mutableStateOf(true) }
 
     var showReportModal by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    var isDefaultDialer by remember { mutableStateOf(DefaultDialerManager.isDefaultDialer(context)) }
+    var hasOverlayPermission by remember { mutableStateOf(DefaultDialerManager.hasOverlayPermission(context)) }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        isDefaultDialer = DefaultDialerManager.isDefaultDialer(context)
+        hasOverlayPermission = DefaultDialerManager.hasOverlayPermission(context)
+    }
+
+    val defaultDialerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        val granted = DefaultDialerManager.isDefaultDialer(context)
+        isDefaultDialer = granted
+        if (granted) {
+            viewModel.showSnackbar(
+                if (language == AppLanguage.BENGALI)
+                    "স্মার্ট ডায়ালার ডিফল্ট ফোন অ্যাপ হিসেবে সেট হয়েছে!"
+                else
+                    "Smart Dialer is now your default phone app!"
+            )
+        }
+    }
+
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        val granted = DefaultDialerManager.hasOverlayPermission(context)
+        hasOverlayPermission = granted
+        if (granted) {
+            viewModel.showSnackbar(
+                if (language == AppLanguage.BENGALI)
+                    "অন্য অ্যাপের ওপর প্রদর্শন অনুমতি প্রদান করা হয়েছে!"
+                else
+                    "Display Over Other Apps permission granted!"
+            )
+        }
+    }
 
     LazyColumn(
         modifier = modifier
@@ -134,6 +182,228 @@ fun SpamShieldScreen(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+            }
+        }
+
+        // System Permissions & Role Card (Default Phone App & Overlay Caller ID)
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("card_system_permissions"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = if (language == AppLanguage.BENGALI) "কলিং অনুমতি ও সিস্টেম রোল" else "Call Roles & System Permissions",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (language == AppLanguage.BENGALI)
+                            "ইনকামিং কল রিসিভ এবং স্প্যাম নম্বর স্বয়ংক্রিয়ভাবে ব্লক করতে স্মার্ট ডায়ালারকে ডিফল্ট ফোন অ্যাপ হিসেবে সেট করুন।"
+                        else
+                            "Set Smart Dialer as your default phone app to receive calls and automatically block spam before ringing.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Default Phone App Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (isDefaultDialer) CallGreen.copy(alpha = 0.15f) else WarningAmber.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Phone,
+                                contentDescription = "Default Phone App",
+                                tint = if (isDefaultDialer) CallGreen else WarningAmber,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (language == AppLanguage.BENGALI) "ডিফল্ট ফোন অ্যাপ" else "Default Phone App",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (isDefaultDialer) {
+                                    if (language == AppLanguage.BENGALI) "ডিফল্ট অ্যাপ হিসেবে সক্রিয়" else "Active as primary dialer"
+                                } else {
+                                    if (language == AppLanguage.BENGALI) "সেট করা নেই" else "Not set as default"
+                                },
+                                fontSize = 11.sp,
+                                color = if (isDefaultDialer) CallGreen else WarningAmber
+                            )
+                        }
+
+                        if (isDefaultDialer) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = CallGreen.copy(alpha = 0.15f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = CallGreen,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (language == AppLanguage.BENGALI) "সক্রিয়" else "Active",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CallGreen
+                                    )
+                                }
+                            }
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Button(
+                                    onClick = {
+                                        val intent = DefaultDialerManager.createDefaultDialerIntent(context)
+                                        defaultDialerLauncher.launch(intent)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.testTag("btn_set_default_dialer_screen")
+                                ) {
+                                    Text(
+                                        text = if (language == AppLanguage.BENGALI) "ডিফল্ট করুন" else "Set Default",
+                                        fontSize = 11.sp
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        val intent = DefaultDialerManager.createDefaultAppsSettingsIntent(context)
+                                        context.startActivity(intent)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    modifier = Modifier.testTag("btn_open_default_apps_settings")
+                                ) {
+                                    Text(
+                                        text = if (language == AppLanguage.BENGALI) "সেটিংস" else "Settings",
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Overlay / Display Over Other Apps Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (hasOverlayPermission) CallGreen.copy(alpha = 0.15f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Layers,
+                                contentDescription = "Overlay Permission",
+                                tint = if (hasOverlayPermission) CallGreen else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (language == AppLanguage.BENGALI) "অন্য অ্যাপের ওপর প্রদর্শন" else "Display Over Other Apps",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (hasOverlayPermission) {
+                                    if (language == AppLanguage.BENGALI) "ফ্লোটিং কলার আইডি অনুমোদিত" else "Floating Caller ID enabled"
+                                } else {
+                                    if (language == AppLanguage.BENGALI) "ইনকামিং কলার আইডি পপআপের জন্য প্রয়োজন" else "Required for live incoming popups"
+                                },
+                                fontSize = 11.sp,
+                                color = if (hasOverlayPermission) CallGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (hasOverlayPermission) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = CallGreen.copy(alpha = 0.15f)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = CallGreen,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (language == AppLanguage.BENGALI) "অনুমোদিত" else "Granted",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CallGreen
+                                    )
+                                }
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    val intent = DefaultDialerManager.createOverlayPermissionIntent(context)
+                                    overlayPermissionLauncher.launch(intent)
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.testTag("btn_request_overlay_permission")
+                            ) {
+                                Text(
+                                    text = if (language == AppLanguage.BENGALI) "অনুমতি দিন" else "Enable",
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
                     }
                 }
             }

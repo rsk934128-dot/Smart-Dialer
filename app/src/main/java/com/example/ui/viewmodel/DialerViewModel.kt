@@ -21,6 +21,8 @@ import com.example.data.model.SpamReportEntity
 import com.example.data.model.SpamRiskLevel
 import com.example.data.repository.DialerRepository
 import com.example.data.repository.NumberLookupResult
+import com.example.service.CallStateEvent
+import com.example.service.CallStateManager
 import com.example.util.CarrierLookupEngine
 import com.example.util.T9SearchEngine
 import kotlinx.coroutines.Job
@@ -57,6 +59,7 @@ enum class AppLanguage {
 data class ActiveCallState(
     val isActive: Boolean = false,
     val isIncomingRinging: Boolean = false,
+    val isCallAnswered: Boolean = false,
     val callerName: String = "",
     val number: String = "",
     val carrier: String = "",
@@ -95,6 +98,17 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             repository.syncDeviceContactsIfAvailable()
+        }
+
+        viewModelScope.launch {
+            CallStateManager.events.collect { event ->
+                when (event) {
+                    is CallStateEvent.IncomingRinging -> handleIncomingCall(event.number)
+                    is CallStateEvent.OutgoingDialing -> { /* Outgoing call started */ }
+                    is CallStateEvent.CallAnswered -> onCallAnswered()
+                    is CallStateEvent.CallEnded -> endActiveCall()
+                }
+            }
         }
     }
 
@@ -293,10 +307,11 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 showSnackbar("Call cannot be placed: Number is in blocklist")
                 return@launch
             }
-            // Launch simulated active call
+            // Launch active call in dialing/ringing state first (seconds only count once answered/received)
             _activeCallState.value = ActiveCallState(
                 isActive = true,
                 isIncomingRinging = false,
+                isCallAnswered = false,
                 callerName = lookup.displayName,
                 number = number,
                 carrier = lookup.carrierName,
@@ -307,7 +322,15 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 riskLevel = lookup.riskLevel,
                 durationSeconds = 0
             )
-            startCallTimer()
+
+            // Simulate call ringing for ~2.5 seconds, then receiver answers and seconds start counting!
+            viewModelScope.launch {
+                delay(2500)
+                if (_activeCallState.value.isActive && !_activeCallState.value.isCallAnswered) {
+                    onCallAnswered()
+                }
+            }
+
             // Also attempt system intent to dial if running on physical device
             try {
                 val intent = Intent(Intent.ACTION_CALL).apply {
@@ -318,6 +341,26 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
             } catch (_: Exception) {
                 // In sandbox or no CALL_PHONE permission granted yet; our in-app simulation takes over!
             }
+        }
+    }
+
+    fun handleIncomingCall(number: String) {
+        viewModelScope.launch {
+            val lookup = repository.lookupNumber(number)
+            _activeCallState.value = ActiveCallState(
+                isActive = false,
+                isIncomingRinging = true,
+                isCallAnswered = false,
+                callerName = lookup.displayName,
+                number = number,
+                carrier = lookup.carrierName,
+                location = lookup.location,
+                isSpam = lookup.isSpam,
+                spamCategory = lookup.spamReport?.category ?: "",
+                spamReportsCount = lookup.spamReport?.reportsCount ?: 0,
+                riskLevel = lookup.riskLevel,
+                durationSeconds = 0
+            )
         }
     }
 
@@ -333,6 +376,7 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         _activeCallState.value = ActiveCallState(
             isActive = false,
             isIncomingRinging = true,
+            isCallAnswered = false,
             callerName = name,
             number = number,
             carrier = carrier.name,
@@ -355,14 +399,19 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun acceptIncomingCall() {
+    fun onCallAnswered() {
         val current = _activeCallState.value
         _activeCallState.value = current.copy(
             isActive = true,
             isIncomingRinging = false,
+            isCallAnswered = true,
             durationSeconds = 0
         )
         startCallTimer()
+    }
+
+    fun acceptIncomingCall() {
+        onCallAnswered()
     }
 
     fun declineIncomingCall() {

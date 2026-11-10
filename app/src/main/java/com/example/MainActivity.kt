@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -12,28 +13,38 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +58,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -58,6 +70,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.example.util.DefaultDialerManager
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -88,11 +104,25 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIncomingIntent(intent)
 
         setContent {
             MyApplicationTheme {
                 MainAppContent(viewModel = viewModel)
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        val number = intent?.getStringExtra("EXTRA_INCOMING_NUMBER")
+        if (!number.isNullOrBlank()) {
+            viewModel.handleIncomingCall(number)
         }
     }
 }
@@ -110,6 +140,29 @@ fun MainAppContent(viewModel: DialerViewModel) {
     val context = LocalContext.current
     var showAboutDialog by remember { mutableStateOf(false) }
     var showCallBlockingScreen by remember { mutableStateOf(false) }
+
+    var isDefaultDialer by remember { mutableStateOf(DefaultDialerManager.isDefaultDialer(context)) }
+    var dismissDefaultBanner by remember { mutableStateOf(false) }
+
+    // Re-check status on resume when user returns from role picker or settings
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        isDefaultDialer = DefaultDialerManager.isDefaultDialer(context)
+    }
+
+    val defaultDialerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        val granted = DefaultDialerManager.isDefaultDialer(context)
+        isDefaultDialer = granted
+        if (granted) {
+            viewModel.showSnackbar(
+                if (currentLanguage == AppLanguage.BENGALI)
+                    "স্মার্ট ডায়ালার সফলভাবে আপনার ডিফল্ট কলিং অ্যাপ হিসেবে সেট হয়েছে!"
+                else
+                    "Smart Dialer is now your default phone app!"
+            )
+        }
+    }
 
     // Request necessary telephony & contact permissions gracefully
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -153,8 +206,9 @@ fun MainAppContent(viewModel: DialerViewModel) {
         }
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -191,6 +245,54 @@ fun MainAppContent(viewModel: DialerViewModel) {
                     }
                 },
                 actions = {
+                    // Default Dialer Role Status Chip
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (isDefaultDialer) 
+                            VerifiedTeal.copy(alpha = 0.15f) 
+                        else 
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .padding(end = 4.dp)
+                            .testTag("badge_default_dialer_status"),
+                        onClick = {
+                            if (!isDefaultDialer) {
+                                val intent = DefaultDialerManager.createDefaultDialerIntent(context)
+                                defaultDialerLauncher.launch(intent)
+                            } else {
+                                viewModel.showSnackbar(
+                                    if (currentLanguage == AppLanguage.BENGALI)
+                                        "স্মার্ট ডায়ালার ইতিমধ্যে আপনার ডিফল্ট কলিং অ্যাপ হিসেবে সক্রিয়"
+                                    else
+                                        "Smart Dialer is already your default phone app"
+                                )
+                            }
+                        }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isDefaultDialer) Icons.Default.CheckCircle else Icons.Default.Phone,
+                                contentDescription = "Default Status",
+                                tint = if (isDefaultDialer) VerifiedTeal else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isDefaultDialer) {
+                                    if (currentLanguage == AppLanguage.BENGALI) "ডিফল্ট" else "Default"
+                                } else {
+                                    if (currentLanguage == AppLanguage.BENGALI) "ডিফল্ট করুন" else "Set Default"
+                                },
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isDefaultDialer) VerifiedTeal else MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
                     // Language Switcher
                     Surface(
                         shape = RoundedCornerShape(20.dp),
@@ -303,21 +405,39 @@ fun MainAppContent(viewModel: DialerViewModel) {
             }
         }
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Crossfade(targetState = currentTab, label = "tab_crossfade") { tab ->
-                when (tab) {
-                    AppTab.KEYPAD -> DialerScreen(viewModel = viewModel)
-                    AppTab.RECENTS -> RecentsScreen(viewModel = viewModel)
-                    AppTab.CONTACTS -> ContactsScreen(viewModel = viewModel)
-                    AppTab.SPAM_SHIELD -> SpamShieldScreen(
-                        viewModel = viewModel,
-                        onNavigateToCallBlocking = { showCallBlockingScreen = true }
-                    )
-                    AppTab.ANALYTICS -> AnalyticsScreen(viewModel = viewModel)
+            // Default Dialer Banner Callout
+            if (!isDefaultDialer && !dismissDefaultBanner) {
+                DefaultDialerBanner(
+                    language = currentLanguage,
+                    onSetDefault = {
+                        val intent = DefaultDialerManager.createDefaultDialerIntent(context)
+                        defaultDialerLauncher.launch(intent)
+                    },
+                    onOpenSettings = {
+                        val intent = DefaultDialerManager.createDefaultAppsSettingsIntent(context)
+                        context.startActivity(intent)
+                    },
+                    onDismiss = { dismissDefaultBanner = true }
+                )
+            }
+
+            Box(modifier = Modifier.weight(1f)) {
+                Crossfade(targetState = currentTab, label = "tab_crossfade") { tab ->
+                    when (tab) {
+                        AppTab.KEYPAD -> DialerScreen(viewModel = viewModel)
+                        AppTab.RECENTS -> RecentsScreen(viewModel = viewModel)
+                        AppTab.CONTACTS -> ContactsScreen(viewModel = viewModel)
+                        AppTab.SPAM_SHIELD -> SpamShieldScreen(
+                            viewModel = viewModel,
+                            onNavigateToCallBlocking = { showCallBlockingScreen = true }
+                        )
+                        AppTab.ANALYTICS -> AnalyticsScreen(viewModel = viewModel)
+                    }
                 }
             }
         }
@@ -335,7 +455,11 @@ fun MainAppContent(viewModel: DialerViewModel) {
     if (activeCallState.isActive) {
         ActiveCallDialog(
             callState = activeCallState,
-            onEndCall = { viewModel.endActiveCall() },
+            language = currentLanguage,
+            onEndCall = {
+                com.example.service.SmartInCallService.disconnectCurrentCall()
+                viewModel.endActiveCall()
+            },
             onToggleMute = { viewModel.toggleMute() },
             onToggleSpeaker = { viewModel.toggleSpeaker() },
             onToggleHold = { viewModel.toggleHold() }
@@ -346,9 +470,19 @@ fun MainAppContent(viewModel: DialerViewModel) {
     if (activeCallState.isIncomingRinging) {
         CallerIdOverlayDialog(
             callState = activeCallState,
-            onAccept = { viewModel.acceptIncomingCall() },
-            onDecline = { viewModel.declineIncomingCall() },
-            onBlockAndReport = { viewModel.blockAndRejectIncomingCall() },
+            language = currentLanguage,
+            onAccept = {
+                com.example.service.SmartInCallService.answerCurrentCall()
+                viewModel.acceptIncomingCall()
+            },
+            onDecline = {
+                com.example.service.SmartInCallService.disconnectCurrentCall()
+                viewModel.declineIncomingCall()
+            },
+            onBlockAndReport = {
+                com.example.service.SmartInCallService.disconnectCurrentCall()
+                viewModel.blockAndRejectIncomingCall()
+            },
             onQuickSms = { msg -> viewModel.showSnackbar("SMS Sent: $msg") }
         )
     }
@@ -397,4 +531,115 @@ fun MainAppContent(viewModel: DialerViewModel) {
             }
         )
     }
+    }
 }
+
+@Composable
+fun DefaultDialerBanner(
+    language: AppLanguage,
+    onSetDefault: () -> Unit,
+    onOpenSettings: (() -> Unit)? = null,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .testTag("banner_default_dialer"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Phone,
+                    contentDescription = "Default Phone App",
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (language == AppLanguage.BENGALI) "কল ডিফল্ট অ্যাপ হিসেবে সেট করুন" else "Set as Default Phone App",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = if (language == AppLanguage.BENGALI)
+                        "ইনকামিং কলার আইডি, স্প্যাম ব্লকিং ও কল ডায়ালিং সক্রিয় করতে স্মার্ট ডায়ালারকে ডিফল্ট করুন"
+                    else
+                        "Enable live caller ID, automatic spam rejection, and direct calling",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                    lineHeight = 14.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Button(
+                        onClick = onSetDefault,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("btn_set_default_dialer")
+                    ) {
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "ডিফল্ট করুন" else "Set Default",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (onOpenSettings != null) {
+                        OutlinedButton(
+                            onClick = onOpenSettings,
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("btn_banner_open_settings")
+                        ) {
+                            Text(
+                                text = if (language == AppLanguage.BENGALI) "সেটিংস" else "Settings",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onDismiss,
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("btn_dismiss_default_banner")
+                    ) {
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "পরে" else "Later",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
