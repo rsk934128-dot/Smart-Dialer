@@ -65,6 +65,25 @@ jobs:
           
           echo "KEYSTORE_FILE_PATH=$KEYSTORE_DEST" >> $GITHUB_ENV
 
+          # Restore debug.keystore from debug.keystore.base64 if present, or generate it
+          DEBUG_KEY_DEST="${{ github.workspace }}/debug.keystore"
+          if [ -f "debug.keystore.base64" ]; then
+            echo "Decoding debug.keystore from debug.keystore.base64..."
+            base64 --decode debug.keystore.base64 > "$DEBUG_KEY_DEST"
+          fi
+          if [ ! -f "$DEBUG_KEY_DEST" ]; then
+            echo "Generating fallback debug.keystore..."
+            keytool -genkeypair -v \
+              -keystore "$DEBUG_KEY_DEST" \
+              -alias androiddebugkey \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass android \
+              -keypass android \
+              -dname "CN=Android Debug, O=Android, C=US"
+          fi
+
       - name: Ensure Gradle Wrapper Exists and is Executable
         run: |
           if [ ! -f "gradlew" ]; then
@@ -83,9 +102,9 @@ jobs:
           KEY_PASSWORD: ${{ env.KEY_PASS }}
         run: |
           echo "Building Release APK..."
-          ./gradlew assembleRelease --stacktrace || gradle assembleRelease --stacktrace || echo "assembleRelease failed, building fallback debug APK"
+          ./gradlew assembleRelease --stacktrace || gradle assembleRelease --stacktrace
           echo "Building Debug APK..."
-          ./gradlew assembleDebug --stacktrace || gradle assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace || gradle assembleDebug --stacktrace || echo "assembleDebug step completed with warning, proceeding with release APK"
 
       - name: Prepare Release APK Artifacts
         run: |
@@ -97,14 +116,14 @@ jobs:
           echo "RESOLVED_TAG=$TAG" >> $GITHUB_ENV
 
           # Copy Release APK if available
-          RELEASE_APK=$(find app/build/outputs/apk/release/ -name "*.apk" 2>/dev/null | head -n 1)
+          RELEASE_APK=$(find app/build/outputs/apk/ -name "*release*.apk" 2>/dev/null | head -n 1)
           if [ -n "$RELEASE_APK" ] && [ -f "$RELEASE_APK" ]; then
             cp "$RELEASE_APK" "release-output/Smart-Dialer-${TAG}-release.apk"
             echo "Release APK prepared: Smart-Dialer-${TAG}-release.apk"
           fi
 
           # Copy Debug APK as well
-          DEBUG_APK=$(find app/build/outputs/apk/debug/ -name "*.apk" 2>/dev/null | head -n 1)
+          DEBUG_APK=$(find app/build/outputs/apk/ -name "*debug*.apk" 2>/dev/null | head -n 1)
           if [ -n "$DEBUG_APK" ] && [ -f "$DEBUG_APK" ]; then
             cp "$DEBUG_APK" "release-output/Smart-Dialer-${TAG}-debug.apk"
             echo "Debug APK prepared: Smart-Dialer-${TAG}-debug.apk"
