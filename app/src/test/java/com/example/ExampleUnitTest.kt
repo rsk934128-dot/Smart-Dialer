@@ -91,8 +91,32 @@ class ExampleUnitTest {
         assertEquals(1, numMatches.size)
         assertEquals("Rubel Sheikh", numMatches[0].contact.name)
 
+        // Initials T9 match: "73" -> S(7)heikh F(3)arid
+        val initialsMatches = T9SearchEngine.filterContacts("73", contacts)
+        assertTrue(initialsMatches.any { it.contact.name == "Sheikh Farid" })
+
+        // Highlight indices for "327" -> "Far" (indices 7, 8, 9 in "Sheikh Farid")
+        val faridHit = faridMatches.first { it.contact.name == "Sheikh Farid" }
+        assertEquals(setOf(7, 8, 9), faridHit.matchedNameIndices)
+
         // Nonexistent query returns empty
         val none = T9SearchEngine.filterContacts("99999", contacts)
         assertTrue(none.isEmpty())
+    }
+
+    @Test
+    fun testT9DigitToAlphabetMapping() {
+        assertEquals("ABC", T9SearchEngine.getLettersForDigit('2'))
+        assertEquals("DEF", T9SearchEngine.getLettersForDigit('3'))
+        assertEquals("GHI", T9SearchEngine.getLettersForDigit('4'))
+        assertEquals("JKL", T9SearchEngine.getLettersForDigit('5'))
+        assertEquals("MNO", T9SearchEngine.getLettersForDigit('6'))
+        assertEquals("PQRS", T9SearchEngine.getLettersForDigit('7'))
+        assertEquals("TUV", T9SearchEngine.getLettersForDigit('8'))
+        assertEquals("WXYZ", T9SearchEngine.getLettersForDigit('9'))
+        assertEquals("", T9SearchEngine.getLettersForDigit('1'))
+
+        val described = T9SearchEngine.describeQueryT9Letters("29")
+        assertEquals(listOf('2' to "ABC", '9' to "WXYZ"), described)
     }
 }

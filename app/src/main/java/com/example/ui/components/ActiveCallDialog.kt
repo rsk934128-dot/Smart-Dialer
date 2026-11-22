@@ -244,19 +244,26 @@ fun ActiveCallDialog(
                         textAlign = TextAlign.Center
                     )
 
-                    if (callState.carrier.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Navy900
-                        ) {
-                            Text(
-                                text = "${callState.carrier} • HD Voice",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                            )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Navy900
+                    ) {
+                        val simText = buildString {
+                            append("SIM ${callState.simSlot}")
+                            if (callState.simCarrierLabel.isNotBlank() && callState.simCarrierLabel != "SIM ${callState.simSlot}") {
+                                append(" (${callState.simCarrierLabel})")
+                            } else if (callState.carrier.isNotBlank()) {
+                                append(" • ${callState.carrier}")
+                            }
+                            append(" • HD Voice")
                         }
+                        Text(
+                            text = simText,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
                     }
                 }
 

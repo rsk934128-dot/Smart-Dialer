@@ -1,8 +1,6 @@
 package com.example
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -31,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Dialpad
 import androidx.compose.material.icons.filled.History
@@ -65,25 +64,38 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.data.remote.CloudSyncRepository
 import com.example.util.DefaultDialerManager
+import com.example.util.PermissionHelper
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
+import com.example.ui.auth.authStateFlow
+import com.example.ui.auth.signOutGoogle
 import com.example.ui.components.ActiveCallDialog
 import com.example.ui.components.CallerIdOverlayDialog
+import com.example.ui.components.CloudAccountDialog
+import com.example.ui.components.MissingPermissionsBanner
+import com.example.ui.components.PermissionRationaleDialog
 import com.example.ui.screens.AnalyticsScreen
+import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.CallBlockingScreen
 import com.example.ui.screens.ContactsScreen
 import com.example.ui.screens.DialerScreen
@@ -94,7 +106,12 @@ import com.example.ui.theme.VerifiedTeal
 import com.example.ui.viewmodel.ActiveCallState
 import com.example.ui.viewmodel.AppLanguage
 import com.example.ui.viewmodel.AppTab
+import com.example.ui.viewmodel.CloudSyncViewModel
 import com.example.ui.viewmodel.DialerViewModel
+import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.auth
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -104,11 +121,85 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
         handleIncomingIntent(intent)
 
         setContent {
             MyApplicationTheme {
-                MainAppContent(viewModel = viewModel)
+                val currentUser by Firebase.auth.authStateFlow()
+                    .collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
+                val currentLanguage by viewModel.currentLanguage.collectAsStateWithLifecycle()
+                val activeCallState by viewModel.activeCallState.collectAsStateWithLifecycle()
+
+                if (currentUser == null) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        AuthScreen(
+                            language = currentLanguage,
+                            onToggleLanguage = { viewModel.toggleLanguage() }
+                        )
+
+                        // Keep incoming/active carrier call overlays functional even on lock/auth screen
+                        if (activeCallState.isActive) {
+                            ActiveCallDialog(
+                                callState = activeCallState,
+                                language = currentLanguage,
+                                onEndCall = {
+                                    com.example.service.SmartInCallService.disconnectCurrentCall()
+                                    viewModel.endActiveCall()
+                                },
+                                onToggleMute = { viewModel.toggleMute() },
+                                onToggleSpeaker = { viewModel.toggleSpeaker() },
+                                onToggleHold = { viewModel.toggleHold() }
+                            )
+                        }
+                        if (activeCallState.isIncomingRinging) {
+                            CallerIdOverlayDialog(
+                                callState = activeCallState,
+                                language = currentLanguage,
+                                onAccept = {
+                                    com.example.service.SmartInCallService.answerCurrentCall()
+                                    viewModel.acceptIncomingCall()
+                                },
+                                onDecline = {
+                                    com.example.service.SmartInCallService.disconnectCurrentCall()
+                                    viewModel.declineIncomingCall()
+                                },
+                                onBlockAndReport = {
+                                    com.example.service.SmartInCallService.disconnectCurrentCall()
+                                    viewModel.blockAndRejectIncomingCall()
+                                },
+                                onQuickSms = { msg -> viewModel.showSnackbar("SMS Sent: $msg") }
+                            )
+                        }
+                    }
+                } else {
+                    val authenticatedUser = currentUser!!
+                    key(authenticatedUser.uid) {
+                        val appContext = LocalContext.current.applicationContext
+                        val cloudViewModel: CloudSyncViewModel = viewModel(
+                            key = authenticatedUser.uid,
+                            factory = viewModelFactory {
+                                initializer {
+                                    CloudSyncViewModel(
+                                        cloudRepo = CloudSyncRepository(appContext),
+                                        currentUserId = authenticatedUser.uid
+                                    )
+                                }
+                            }
+                        )
+                        LaunchedEffect(authenticatedUser.uid) {
+                            cloudViewModel.ensureProfile(authenticatedUser)
+                        }
+                        MainAppContent(
+                            viewModel = viewModel,
+                            cloudViewModel = cloudViewModel,
+                            currentUser = authenticatedUser
+                        )
+                    }
+                }
             }
         }
     }
@@ -120,33 +211,60 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
+        val callType = intent?.getStringExtra("EXTRA_CALL_TYPE")
         val number = intent?.getStringExtra("EXTRA_INCOMING_NUMBER")
-        if (!number.isNullOrBlank()) {
-            viewModel.handleIncomingCall(number)
+        val simSlot = intent?.getIntExtra("EXTRA_SIM_SLOT", 1) ?: 1
+        val callerName = intent?.getStringExtra("EXTRA_CALLER_NAME").orEmpty()
+        if (callType == "INCOMING" && !number.isNullOrBlank()) {
+            viewModel.handleIncomingCall(
+                number = number,
+                simSlot = simSlot,
+                callerDisplayName = callerName
+            )
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainAppContent(viewModel: DialerViewModel) {
+fun MainAppContent(
+    viewModel: DialerViewModel,
+    cloudViewModel: CloudSyncViewModel,
+    currentUser: FirebaseUser
+) {
     val currentTab by viewModel.currentTab.collectAsState()
     val activeCallState by viewModel.activeCallState.collectAsState()
     val snackbarMessage by viewModel.snackbarMessage.collectAsState()
     val currentLanguage by viewModel.currentLanguage.collectAsState()
     val inputNumber by viewModel.inputNumber.collectAsState()
+    val contacts by viewModel.contacts.collectAsState()
+    val callLogs by viewModel.callLogs.collectAsState()
+    val blockedNumbers by viewModel.blockedNumbers.collectAsState()
+    val spamReports by viewModel.spamReports.collectAsState()
+
+    val permissionStatus by viewModel.permissionStatus.collectAsStateWithLifecycle()
+    val cloudSummaryState by cloudViewModel.cloudSummaryState.collectAsStateWithLifecycle()
+    val isCloudBusy by cloudViewModel.isSyncBusy.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showAboutDialog by remember { mutableStateOf(false) }
     var showCallBlockingScreen by remember { mutableStateOf(false) }
+    var showCloudAccountDialog by remember { mutableStateOf(false) }
+    var showPermissionRationaleDialog by remember { mutableStateOf(false) }
+    var isPermanentlyDenied by remember { mutableStateOf(false) }
+    var dismissMissingPermissionsBanner by remember { mutableStateOf(false) }
 
     var isDefaultDialer by remember { mutableStateOf(DefaultDialerManager.isDefaultDialer(context)) }
     var dismissDefaultBanner by remember { mutableStateOf(false) }
 
-    // Re-check status on resume when user returns from role picker or settings
+    val corePermissions = remember { PermissionHelper.corePermissionsArray() }
+
+    // Re-check status, SIM slots, and real call history whenever user returns to app
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         isDefaultDialer = DefaultDialerManager.isDefaultDialer(context)
+        viewModel.refreshSimsAndSyncHistory(showFeedback = false)
     }
 
     val defaultDialerLauncher = rememberLauncherForActivityResult(
@@ -155,6 +273,7 @@ fun MainAppContent(viewModel: DialerViewModel) {
         val granted = DefaultDialerManager.isDefaultDialer(context)
         isDefaultDialer = granted
         if (granted) {
+            viewModel.refreshSimsAndSyncHistory(showFeedback = false)
             viewModel.showSnackbar(
                 if (currentLanguage == AppLanguage.BENGALI)
                     "স্মার্ট ডায়ালার সফলভাবে আপনার ডিফল্ট কলিং অ্যাপ হিসেবে সেট হয়েছে!"
@@ -164,26 +283,47 @@ fun MainAppContent(viewModel: DialerViewModel) {
         }
     }
 
-    // Request necessary telephony & contact permissions gracefully
+    // Request telephony, dual-SIM, contacts, call-log & notification permissions gracefully
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        // Permissions handled; internal Room cache ensures smooth operation either way
+        viewModel.refreshSimsAndSyncHistory(showFeedback = false)
+        val remainingMissing = PermissionHelper.getMissingPermissions(context, corePermissions)
+        isPermanentlyDenied = PermissionHelper.isPermanentlyDenied(context, remainingMissing)
+    }
+
+    fun triggerCorePermissionFlow() {
+        val missing = PermissionHelper.getMissingPermissions(context, corePermissions)
+        if (missing.isEmpty()) {
+            viewModel.refreshSimsAndSyncHistory(showFeedback = true)
+            return
+        }
+        val permDenied = PermissionHelper.isPermanentlyDenied(context, missing)
+        if (permDenied) {
+            isPermanentlyDenied = true
+            showPermissionRationaleDialog = true
+        } else {
+            isPermanentlyDenied = false
+            PermissionHelper.markPermissionsPrompted(context, missing)
+            permissionLauncher.launch(missing.toTypedArray())
+        }
     }
 
     LaunchedEffect(Unit) {
-        val permissionsToRequest = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            permissionsToRequest.add(Manifest.permission.CALL_PHONE)
-        }
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            permissionsToRequest.add(Manifest.permission.READ_CONTACTS)
-        }
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
-            permissionsToRequest.add(Manifest.permission.READ_CALL_LOG)
-        }
-        if (permissionsToRequest.isNotEmpty()) {
-            permissionLauncher.launch(permissionsToRequest.toTypedArray())
+        val missing = PermissionHelper.getMissingPermissions(context, corePermissions)
+        if (missing.isNotEmpty()) {
+            val activity = with(PermissionHelper) { context.findActivity() }
+            if (PermissionHelper.shouldShowRationale(activity, missing)) {
+                isPermanentlyDenied = false
+                showPermissionRationaleDialog = true
+            } else if (!PermissionHelper.isPermanentlyDenied(context, missing)) {
+                PermissionHelper.markPermissionsPrompted(context, missing)
+                permissionLauncher.launch(missing.toTypedArray())
+            } else {
+                isPermanentlyDenied = true
+            }
+        } else {
+            viewModel.refreshSimsAndSyncHistory(showFeedback = false)
         }
     }
 
@@ -332,6 +472,18 @@ fun MainAppContent(viewModel: DialerViewModel) {
                         )
                     }
 
+                    // Cloud Sync & Google Account manager
+                    IconButton(
+                        onClick = { showCloudAccountDialog = true },
+                        modifier = Modifier.testTag("btn_cloud_account")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = "Cloud Backup & Account",
+                            tint = VerifiedTeal
+                        )
+                    }
+
                     // Architecture & Info dialog trigger
                     IconButton(
                         onClick = { showAboutDialog = true },
@@ -426,11 +578,24 @@ fun MainAppContent(viewModel: DialerViewModel) {
                 )
             }
 
+            // Missing Core Permissions Banner (Call Logs, Phone State, Contacts)
+            if (!permissionStatus.isCoreGranted && !dismissMissingPermissionsBanner) {
+                MissingPermissionsBanner(
+                    language = currentLanguage,
+                    status = permissionStatus,
+                    onRequestPermissions = { triggerCorePermissionFlow() },
+                    onDismiss = { dismissMissingPermissionsBanner = true }
+                )
+            }
+
             Box(modifier = Modifier.weight(1f)) {
                 Crossfade(targetState = currentTab, label = "tab_crossfade") { tab ->
                     when (tab) {
                         AppTab.KEYPAD -> DialerScreen(viewModel = viewModel)
-                        AppTab.RECENTS -> RecentsScreen(viewModel = viewModel)
+                        AppTab.RECENTS -> RecentsScreen(
+                            viewModel = viewModel,
+                            onOpenCloudSync = { showCloudAccountDialog = true }
+                        )
                         AppTab.CONTACTS -> ContactsScreen(viewModel = viewModel)
                         AppTab.SPAM_SHIELD -> SpamShieldScreen(
                             viewModel = viewModel,
@@ -484,6 +649,88 @@ fun MainAppContent(viewModel: DialerViewModel) {
                 viewModel.blockAndRejectIncomingCall()
             },
             onQuickSms = { msg -> viewModel.showSnackbar("SMS Sent: $msg") }
+        )
+    }
+
+    // Permission Rationale / App Settings Redirect Dialog
+    if (showPermissionRationaleDialog) {
+        PermissionRationaleDialog(
+            language = currentLanguage,
+            status = permissionStatus,
+            isPermanentlyDenied = isPermanentlyDenied,
+            onGrantPermissions = {
+                showPermissionRationaleDialog = false
+                val missing = PermissionHelper.getMissingPermissions(context, corePermissions)
+                if (missing.isNotEmpty()) {
+                    PermissionHelper.markPermissionsPrompted(context, missing)
+                    permissionLauncher.launch(missing.toTypedArray())
+                }
+            },
+            onOpenSettings = {
+                showPermissionRationaleDialog = false
+                context.startActivity(PermissionHelper.createAppSettingsIntent(context))
+            },
+            onDismiss = { showPermissionRationaleDialog = false }
+        )
+    }
+
+    // Cloud Backup, Restore & Sign-Out Dialog
+    if (showCloudAccountDialog) {
+        CloudAccountDialog(
+            user = currentUser,
+            language = currentLanguage,
+            cloudState = cloudSummaryState,
+            isSyncBusy = isCloudBusy,
+            onBackupNow = {
+                cloudViewModel.backupToCloud(
+                    contacts = contacts,
+                    callLogs = callLogs,
+                    blockedNumbers = blockedNumbers,
+                    spamReports = spamReports
+                ) { res ->
+                    res.onSuccess { count ->
+                        viewModel.showSnackbar(
+                            if (currentLanguage == AppLanguage.BENGALI)
+                                "ফায়ারবেস ক্লাউডে $count টি আইটেম ব্যাকআপ হয়েছে!"
+                            else
+                                "Backed up $count items to Firebase Cloud!"
+                        )
+                    }.onFailure { err ->
+                        viewModel.showSnackbar(
+                            if (currentLanguage == AppLanguage.BENGALI)
+                                "ক্লাউড ব্যাকআপ ব্যর্থ: ${err.localizedMessage ?: "ত্রুটি"}"
+                            else
+                                "Cloud backup failed: ${err.localizedMessage ?: "Error"}"
+                        )
+                    }
+                }
+            },
+            onRestoreNow = {
+                cloudViewModel.restoreFromCloud(context) { res ->
+                    res.onSuccess { restored ->
+                        viewModel.showSnackbar(
+                            if (currentLanguage == AppLanguage.BENGALI)
+                                "ক্লাউড থেকে $restored টি নতুন ডেটা রিস্টোর হয়েছে!"
+                            else
+                                "Restored $restored items from Firebase Cloud!"
+                        )
+                    }.onFailure { err ->
+                        viewModel.showSnackbar(
+                            if (currentLanguage == AppLanguage.BENGALI)
+                                "ক্লাউড রিস্টোর ব্যর্থ: ${err.localizedMessage ?: "ত্রুটি"}"
+                            else
+                                "Cloud restore failed: ${err.localizedMessage ?: "Error"}"
+                        )
+                    }
+                }
+            },
+            onSignOut = {
+                showCloudAccountDialog = false
+                scope.launch {
+                    signOutGoogle(context)
+                }
+            },
+            onDismiss = { showCloudAccountDialog = false }
         )
     }
 

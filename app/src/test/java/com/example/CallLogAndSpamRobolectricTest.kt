@@ -220,4 +220,126 @@ class CallLogAndSpamRobolectricTest {
             com.example.service.CallStateEvent.CallAnswered
         )
     }
+
+    @Test
+    fun testSimSlotResolutionForDualSim() {
+        val sims = listOf(
+            com.example.util.SimSlotInfo(
+                slotNumber = 1,
+                subscriptionId = 10,
+                displayName = "SIM 1",
+                carrierName = "Grameenphone",
+                accountId = "898800100001"
+            ),
+            com.example.util.SimSlotInfo(
+                slotNumber = 2,
+                subscriptionId = 22,
+                displayName = "SIM 2",
+                carrierName = "Robi",
+                accountId = "898800200002"
+            )
+        )
+
+        assertEquals(1, com.example.util.SimManager.resolveSimSlotFromList("898800100001", sims))
+        assertEquals(2, com.example.util.SimManager.resolveSimSlotFromList("898800200002", sims))
+        assertEquals(2, com.example.util.SimManager.resolveSimSlotFromList("22", sims))
+        assertEquals(2, com.example.util.SimManager.resolveSimSlotFromList("sim2_account", emptyList()))
+        assertEquals(1, com.example.util.SimManager.resolveSimSlotFromList("sim1_account", emptyList()))
+    }
+
+    @Test
+    fun testRealCallLogBackupFromContentProviderWithDeduplication() = runBlocking {
+        // Grant READ_CALL_LOG & READ_PHONE_STATE in Robolectric
+        val app = org.robolectric.Shadows.shadowOf(context as android.app.Application)
+        app.grantPermissions(
+            android.Manifest.permission.READ_CALL_LOG,
+            android.Manifest.permission.READ_PHONE_STATE
+        )
+
+        val now = System.currentTimeMillis()
+        val fakeCallLogProvider = object : android.content.ContentProvider() {
+            override fun onCreate() = true
+            override fun query(
+                uri: android.net.Uri,
+                projection: Array<out String>?,
+                selection: String?,
+                selectionArgs: Array<out String>?,
+                sortOrder: String?
+            ): android.database.Cursor {
+                val cols = arrayOf(
+                    android.provider.CallLog.Calls.NUMBER,
+                    android.provider.CallLog.Calls.CACHED_NAME,
+                    android.provider.CallLog.Calls.TYPE,
+                    android.provider.CallLog.Calls.DATE,
+                    android.provider.CallLog.Calls.DURATION,
+                    android.provider.CallLog.Calls.PHONE_ACCOUNT_ID
+                )
+                return android.database.MatrixCursor(cols).apply {
+                    addRow(
+                        arrayOf(
+                            "+8801711223344",
+                            "Karim Uddin",
+                            android.provider.CallLog.Calls.INCOMING_TYPE,
+                            now - 60_000L,
+                            42L,
+                            "sim2"
+                        )
+                    )
+                    addRow(
+                        arrayOf(
+                            "+8801811998877",
+                            "",
+                            android.provider.CallLog.Calls.MISSED_TYPE,
+                            now - 120_000L,
+                            0L,
+                            "sim1"
+                        )
+                    )
+                }
+            }
+
+            override fun getType(uri: android.net.Uri): String? = null
+            override fun insert(uri: android.net.Uri, values: android.content.ContentValues?): android.net.Uri? = null
+            override fun delete(uri: android.net.Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+            override fun update(
+                uri: android.net.Uri,
+                values: android.content.ContentValues?,
+                selection: String?,
+                selectionArgs: Array<out String>?
+            ): Int = 0
+        }
+        fakeCallLogProvider.onCreate()
+        org.robolectric.shadows.ShadowContentResolver.registerProviderInternal(
+            android.provider.CallLog.AUTHORITY,
+            fakeCallLogProvider
+        )
+
+        val firstImported = repository.syncDeviceCallLogsIfAvailable()
+        assertEquals(2, firstImported)
+
+        val backedUpLogs = repository.allCallLogs.first()
+        assertEquals(2, backedUpLogs.size)
+        assertEquals("Karim Uddin", backedUpLogs[0].cachedName)
+        assertEquals(2, backedUpLogs[0].simSlot)
+        assertEquals(CallType.INCOMING, backedUpLogs[0].type)
+        assertEquals(42L, backedUpLogs[0].durationSeconds)
+
+        assertEquals("+8801811998877", backedUpLogs[1].number)
+        assertEquals(1, backedUpLogs[1].simSlot)
+        assertEquals(CallType.MISSED, backedUpLogs[1].type)
+        assertEquals("Robi Axiata", backedUpLogs[1].carrier)
+
+        // Running sync a second time must deduplicate cleanly
+        val secondImported = repository.syncDeviceCallLogsIfAvailable()
+        assertEquals(0, secondImported)
+        assertEquals(2, repository.allCallLogs.first().size)
+    }
+
+    @Test
+    fun testDialerViewModelInitializationDoesNotThrowNpe() {
+        val vm = com.example.ui.viewmodel.DialerViewModel(context as android.app.Application)
+        assertNotNull(vm.availableSims.value)
+        assertEquals(1, vm.selectedSimSlot.value)
+        assertFalse(vm.hasPhonePermission.value)
+    }
 }

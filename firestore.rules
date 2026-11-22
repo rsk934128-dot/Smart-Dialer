@@ -1,0 +1,206 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Shared security primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidServerTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+             (!('backedUpLogsCount' in data) || (data.backedUpLogsCount is int && data.backedUpLogsCount >= 0)) &&
+             (!('backedUpContactsCount' in data) || (data.backedUpContactsCount is int && data.backedUpContactsCount >= 0)) &&
+             isValidServerTimestamp(data.createdAt) &&
+             isValidServerTimestamp(data.updatedAt);
+    }
+
+    function isValidCloudCallLog(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.number is string && data.number.size() >= 1 && data.number.size() <= 40 &&
+             (!('cachedName' in data) || (data.cachedName is string && data.cachedName.size() <= 100)) &&
+             data.callType is string && data.callType in ['INCOMING', 'OUTGOING', 'MISSED', 'REJECTED', 'BLOCKED'] &&
+             data.callTimestampMs is int && data.callTimestampMs >= 0 &&
+             data.durationSeconds is int && data.durationSeconds >= 0 &&
+             (!('carrier' in data) || (data.carrier is string && data.carrier.size() <= 80)) &&
+             (!('location' in data) || (data.location is string && data.location.size() <= 80)) &&
+             data.spamFlag is bool &&
+             (!('spamCategory' in data) || (data.spamCategory is string && data.spamCategory.size() <= 60)) &&
+             data.simSlot is int && data.simSlot >= 1 && data.simSlot <= 2 &&
+             isValidServerTimestamp(data.createdAt) &&
+             isValidServerTimestamp(data.updatedAt);
+    }
+
+    function isValidCloudContact(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 1 && data.phoneNumber.size() <= 40 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+             (!('company' in data) || (data.company is string && data.company.size() <= 100)) &&
+             (!('label' in data) || (data.label is string && data.label.size() <= 40)) &&
+             data.favorite is bool &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+             data.avatarColorIndex is int && data.avatarColorIndex >= 0 && data.avatarColorIndex <= 20 &&
+             isValidServerTimestamp(data.createdAt) &&
+             isValidServerTimestamp(data.updatedAt);
+    }
+
+    function isValidCloudBlockedNumber(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.number is string && data.number.size() >= 1 && data.number.size() <= 40 &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 100)) &&
+             data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 200 &&
+             isValidServerTimestamp(data.createdAt) &&
+             isValidServerTimestamp(data.updatedAt);
+    }
+
+    function isValidCloudSpamReport(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.number is string && data.number.size() >= 1 && data.number.size() <= 40 &&
+             data.reportedName is string && data.reportedName.size() >= 1 && data.reportedName.size() <= 100 &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+             data.reportsCount is int && data.reportsCount >= 1 &&
+             data.riskLevel is string && data.riskLevel in ['SAFE', 'SUSPICIOUS', 'HIGH_RISK'] &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 300)) &&
+             isValidServerTimestamp(data.createdAt) &&
+             isValidServerTimestamp(data.updatedAt);
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'photoUrl', 'backedUpLogsCount', 'backedUpContactsCount', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoUrl', 'backedUpLogsCount', 'backedUpContactsCount', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // User-scoped Call Logs backup
+      match /call_logs/{logId} {
+        allow get: if isOwner(userId) && isValidId(logId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(logId) &&
+                         incoming().keys().hasAll(['userId', 'number', 'callType', 'callTimestampMs', 'durationSeconds', 'spamFlag', 'simSlot', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'number', 'cachedName', 'callType', 'callTimestampMs', 'durationSeconds', 'carrier', 'location', 'spamFlag', 'spamCategory', 'simSlot', 'createdAt', 'updatedAt']) &&
+                         isValidCloudCallLog(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(logId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidCloudCallLog(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['cachedName', 'durationSeconds', 'spamFlag', 'spamCategory', 'simSlot', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(logId);
+      }
+
+      // User-scoped Contacts backup
+      match /contacts/{contactId} {
+        allow get: if isOwner(userId) && isValidId(contactId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(contactId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'phoneNumber', 'favorite', 'avatarColorIndex', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'phoneNumber', 'email', 'company', 'label', 'favorite', 'notes', 'avatarColorIndex', 'createdAt', 'updatedAt']) &&
+                         isValidCloudContact(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(contactId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidCloudContact(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phoneNumber', 'email', 'company', 'label', 'favorite', 'notes', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(contactId);
+      }
+
+      // User-scoped Blocked Numbers backup
+      match /blocked_numbers/{blockId} {
+        allow get: if isOwner(userId) && isValidId(blockId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(blockId) &&
+                         incoming().keys().hasAll(['userId', 'number', 'reason', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'number', 'name', 'reason', 'createdAt', 'updatedAt']) &&
+                         isValidCloudBlockedNumber(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(blockId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidCloudBlockedNumber(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'reason', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(blockId);
+      }
+
+      // User-scoped Spam Reports backup
+      match /spam_reports/{reportId} {
+        allow get: if isOwner(userId) && isValidId(reportId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(reportId) &&
+                         incoming().keys().hasAll(['userId', 'number', 'reportedName', 'category', 'reportsCount', 'riskLevel', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'number', 'reportedName', 'category', 'reportsCount', 'riskLevel', 'notes', 'createdAt', 'updatedAt']) &&
+                         isValidCloudSpamReport(incoming());
+
+        allow update: if isOwner(userId) &&
+                         isValidId(reportId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         isValidCloudSpamReport(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['reportedName', 'category', 'reportsCount', 'riskLevel', 'notes', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(reportId);
+      }
+    }
+  }
+}

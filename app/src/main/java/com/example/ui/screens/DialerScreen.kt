@@ -42,20 +42,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.components.AddContactDialog
-import com.example.ui.components.KeypadBottomBar
-import com.example.ui.components.KeypadMatrix
+import com.example.ui.components.PermissionRationaleDialog
+import com.example.ui.components.T9KeypadInterface
 import com.example.ui.theme.AvatarColors
 import com.example.ui.theme.CallGreen
 import com.example.ui.theme.SpamRed
@@ -63,6 +67,8 @@ import com.example.ui.theme.VerifiedTeal
 import com.example.ui.viewmodel.AppLanguage
 import com.example.ui.viewmodel.DialerViewModel
 import com.example.util.CarrierLookupEngine
+import com.example.util.PermissionHelper
+import com.example.util.T9SearchEngine
 
 @Composable
 fun DialerScreen(
@@ -73,6 +79,21 @@ fun DialerScreen(
     val isKeypadVisible by viewModel.isKeypadVisible.collectAsState()
     val t9Matches by viewModel.t9Matches.collectAsState()
     val language by viewModel.currentLanguage.collectAsState()
+    val availableSims by viewModel.availableSims.collectAsState()
+    val selectedSimSlot by viewModel.selectedSimSlot.collectAsState()
+    val hasPhonePermission by viewModel.hasPhonePermission.collectAsState()
+    val permissionStatus by viewModel.permissionStatus.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    var showPhoneRationaleDialog by remember { mutableStateOf(false) }
+    var isPhonePermDenied by remember { mutableStateOf(false) }
+    val phonePermissions = remember { PermissionHelper.phoneGroupPermissionsArray() }
+
+    val phonePermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        viewModel.refreshSimsAndSyncHistory(showFeedback = false)
+    }
 
     var showAddContactDialog by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
@@ -255,16 +276,57 @@ fun DialerScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (t9Matches.isNotEmpty()) {
-                    items(t9Matches.take(4)) { match ->
+                    items(t9Matches.take(6)) { match ->
                         val contact = match.contact
                         val avatarBg = AvatarColors[contact.avatarColorIndex % AvatarColors.size]
+                        val primaryColor = MaterialTheme.colorScheme.primary
+                        val highlightedName = remember(contact.name, match.matchedNameIndices, primaryColor) {
+                            buildAnnotatedString {
+                                contact.name.forEachIndexed { idx, ch ->
+                                    if (idx in match.matchedNameIndices) {
+                                        withStyle(
+                                            SpanStyle(
+                                                color = primaryColor,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                background = primaryColor.copy(alpha = 0.14f)
+                                            )
+                                        ) {
+                                            append(ch)
+                                        }
+                                    } else {
+                                        append(ch)
+                                    }
+                                }
+                            }
+                        }
+                        val highlightedNumber = remember(contact.phoneNumber, match.matchedNumberRange, primaryColor) {
+                            buildAnnotatedString {
+                                contact.phoneNumber.forEachIndexed { idx, ch ->
+                                    val range = match.matchedNumberRange
+                                    if (range != null && idx in range) {
+                                        withStyle(
+                                            SpanStyle(
+                                                color = primaryColor,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        ) {
+                                            append(ch)
+                                        }
+                                    } else {
+                                        append(ch)
+                                    }
+                                }
+                            }
+                        }
+
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
                                     viewModel.setInputNumber(contact.phoneNumber)
-                                },
-                            shape = RoundedCornerShape(12.dp),
+                                }
+                                .testTag("t9_match_card_${contact.id}"),
+                            shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(
                                 containerColor = MaterialTheme.colorScheme.surface
                             )
@@ -291,27 +353,54 @@ fun DialerScreen(
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = highlightedName,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 14.sp,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (match.matchType == T9SearchEngine.MatchType.NAME) {
+                                                primaryColor.copy(alpha = 0.12f)
+                                            } else {
+                                                CallGreen.copy(alpha = 0.12f)
+                                            }
+                                        ) {
+                                            Text(
+                                                text = if (match.matchType == T9SearchEngine.MatchType.NAME) "T9" else "NUM",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (match.matchType == T9SearchEngine.MatchType.NAME) primaryColor else CallGreen,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
                                     Text(
-                                        text = contact.name,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = contact.phoneNumber,
+                                        text = highlightedNumber,
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 IconButton(
                                     onClick = { viewModel.startCall(contact.phoneNumber) },
-                                    modifier = Modifier.size(34.dp)
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .size(48.dp)
+                                        .testTag("t9_match_call_${contact.id}")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Call,
-                                        contentDescription = "Call",
+                                        contentDescription = "Call ${contact.name}",
                                         tint = CallGreen,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
@@ -338,36 +427,44 @@ fun DialerScreen(
             Spacer(modifier = Modifier.weight(1f))
         }
 
-        // Retractable Keypad Matrix & Bottom Bar
+        // Retractable T9 Keypad Interface
         AnimatedVisibility(
             visible = isKeypadVisible,
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it })
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 6.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                KeypadMatrix(
-                    onDigitClick = { digit -> viewModel.appendDigit(digit) },
-                    onLongDigitClick = { digit -> viewModel.appendDigit(digit) }
-                )
-
-                KeypadBottomBar(
-                    hasInput = inputNumber.isNotEmpty(),
-                    onCallClick = {
-                        if (inputNumber.isNotEmpty()) {
-                            viewModel.startCall(inputNumber)
-                        }
-                    },
-                    onBackspaceClick = { viewModel.deleteDigit() },
-                    onClearAllClick = { viewModel.clearInput() },
-                    onAddContactClick = { showAddContactDialog = true },
-                    onToggleKeypad = { viewModel.toggleKeypadVisibility() }
-                )
-            }
+            T9KeypadInterface(
+                inputQuery = inputNumber,
+                matchCount = t9Matches.size,
+                language = language,
+                availableSims = availableSims,
+                selectedSimSlot = selectedSimSlot,
+                hasPhonePermission = hasPhonePermission,
+                onSelectSimSlot = { slot -> viewModel.selectSimSlot(slot) },
+                onRequestPhonePermission = {
+                    val missing = PermissionHelper.getMissingPermissions(context, phonePermissions)
+                    if (missing.isEmpty()) {
+                        viewModel.refreshSimsAndSyncHistory(showFeedback = false)
+                    } else if (PermissionHelper.isPermanentlyDenied(context, missing)) {
+                        isPhonePermDenied = true
+                        showPhoneRationaleDialog = true
+                    } else {
+                        PermissionHelper.markPermissionsPrompted(context, missing)
+                        phonePermissionLauncher.launch(missing.toTypedArray())
+                    }
+                },
+                onDigitClick = { digit -> viewModel.appendDigit(digit) },
+                onLongDigitClick = { digit -> viewModel.appendDigit(digit) },
+                onCallClick = {
+                    if (inputNumber.isNotEmpty()) {
+                        viewModel.startCall(inputNumber)
+                    }
+                },
+                onBackspaceClick = { viewModel.deleteDigit() },
+                onClearAllClick = { viewModel.clearInput() },
+                onAddContactClick = { showAddContactDialog = true },
+                onToggleKeypad = { viewModel.toggleKeypadVisibility() }
+            )
         }
 
         if (!isKeypadVisible) {
@@ -385,5 +482,26 @@ fun DialerScreen(
                 }
             }
         }
+    }
+
+    if (showPhoneRationaleDialog) {
+        PermissionRationaleDialog(
+            language = language,
+            status = permissionStatus.copy(hasCallLog = true, hasContacts = true),
+            isPermanentlyDenied = isPhonePermDenied,
+            onGrantPermissions = {
+                showPhoneRationaleDialog = false
+                val missing = PermissionHelper.getMissingPermissions(context, phonePermissions)
+                if (missing.isNotEmpty()) {
+                    PermissionHelper.markPermissionsPrompted(context, missing)
+                    phonePermissionLauncher.launch(missing.toTypedArray())
+                }
+            },
+            onOpenSettings = {
+                showPhoneRationaleDialog = false
+                context.startActivity(PermissionHelper.createAppSettingsIntent(context))
+            },
+            onDismiss = { showPhoneRationaleDialog = false }
+        )
     }
 }

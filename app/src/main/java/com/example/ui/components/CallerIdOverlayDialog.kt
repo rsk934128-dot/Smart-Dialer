@@ -223,21 +223,31 @@ fun CallerIdOverlayDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Telecom Operator & Location tag
-                if (callState.carrier.isNotBlank() || callState.location.isNotBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Navy900.copy(alpha = 0.85f),
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    ) {
-                        Text(
-                            text = "${callState.carrier} • ${callState.location}",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
+                // Telecom Operator, SIM Slot & Location tag
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Navy900.copy(alpha = 0.85f),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    val infoLine = buildString {
+                        append("SIM ${callState.simSlot}")
+                        if (callState.simCarrierLabel.isNotBlank() && callState.simCarrierLabel != "SIM ${callState.simSlot}") {
+                            append(" (${callState.simCarrierLabel})")
+                        }
+                        if (callState.carrier.isNotBlank()) {
+                            append(" • ${callState.carrier}")
+                        }
+                        if (callState.location.isNotBlank()) {
+                            append(" • ${callState.location}")
+                        }
                     }
+                    Text(
+                        text = infoLine,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
                 }
 
                 // If Spam, show community report stats

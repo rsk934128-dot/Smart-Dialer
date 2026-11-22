@@ -195,6 +195,26 @@ fun CallLogCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    if (callLog.simSlot in 1..2) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (callLog.simSlot == 1) {
+                                CallGreen.copy(alpha = 0.14f)
+                            } else {
+                                AccentBlue.copy(alpha = 0.14f)
+                            },
+                            modifier = Modifier.testTag("call_log_sim_${callLog.id}")
+                        ) {
+                            Text(
+                                text = "SIM ${callLog.simSlot}",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (callLog.simSlot == 1) CallGreen else AccentBlue,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+
                     if (callLog.carrier.isNotBlank()) {
                         Text(
                             text = "• ${callLog.carrier}",

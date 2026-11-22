@@ -28,6 +28,9 @@ interface AppDao {
     @Query("SELECT * FROM contacts WHERE phoneNumber = :number OR phoneNumber LIKE '%' || :number || '%' OR :number LIKE '%' || phoneNumber || '%' LIMIT 1")
     suspend fun findContactByNumber(number: String): ContactEntity?
 
+    @Query("SELECT * FROM contacts")
+    suspend fun getAllContactsSnapshot(): List<ContactEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertContact(contact: ContactEntity): Long
 
@@ -43,6 +46,9 @@ interface AppDao {
     // --- Call Logs ---
     @Query("SELECT * FROM call_logs ORDER BY timestamp DESC")
     fun getAllCallLogs(): Flow<List<CallLogEntity>>
+
+    @Query("SELECT * FROM call_logs ORDER BY timestamp DESC")
+    suspend fun getAllCallLogsSnapshot(): List<CallLogEntity>
 
     @Query("SELECT * FROM call_logs WHERE type = :type ORDER BY timestamp DESC")
     fun getCallLogsByType(type: String): Flow<List<CallLogEntity>>

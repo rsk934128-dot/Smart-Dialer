@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,25 +18,28 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -43,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -52,11 +59,13 @@ import com.example.data.model.ContactEntity
 import com.example.ui.components.AddContactDialog
 import com.example.ui.components.ContactCard
 import com.example.ui.components.FavoriteContactBubble
+import com.example.ui.components.PermissionRationaleDialog
 import com.example.ui.theme.CallGreen
 import com.example.ui.theme.SpamRed
 import com.example.ui.theme.WarningAmber
 import com.example.ui.viewmodel.AppLanguage
 import com.example.ui.viewmodel.DialerViewModel
+import com.example.util.PermissionHelper
 
 @Composable
 fun ContactsScreen(
@@ -66,11 +75,38 @@ fun ContactsScreen(
     val contacts by viewModel.contacts.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val language by viewModel.currentLanguage.collectAsState()
+    val permissionStatus by viewModel.permissionStatus.collectAsState()
     val context = LocalContext.current
 
     var searchContactQuery by remember { mutableStateOf("") }
     var showAddDialog by remember { mutableStateOf(false) }
     var selectedContactDetails by remember { mutableStateOf<ContactEntity?>(null) }
+    var showContactsRationaleDialog by remember { mutableStateOf(false) }
+    var isPermanentlyDenied by remember { mutableStateOf(false) }
+
+    val contactsPermissions = remember { PermissionHelper.contactsPermissionsArray() }
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        viewModel.refreshSimsAndSyncHistory(showFeedback = false)
+        viewModel.syncContactsNow(showFeedback = true)
+    }
+
+    fun requestContactsPermission() {
+        val missing = PermissionHelper.getMissingPermissions(context, contactsPermissions)
+        if (missing.isEmpty()) {
+            viewModel.syncContactsNow(showFeedback = true)
+            return
+        }
+        val permDeniedForever = PermissionHelper.isPermanentlyDenied(context, missing)
+        if (permDeniedForever) {
+            isPermanentlyDenied = true
+            showContactsRationaleDialog = true
+        } else {
+            PermissionHelper.markPermissionsPrompted(context, missing)
+            contactsPermissionLauncher.launch(missing.toTypedArray())
+        }
+    }
 
     val filteredContacts = remember(contacts, searchContactQuery) {
         if (searchContactQuery.isBlank()) {
@@ -125,7 +161,18 @@ fun ContactsScreen(
                         .testTag("search_contacts_input")
                 )
 
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+
+                IconButton(
+                    onClick = { requestContactsPermission() },
+                    modifier = Modifier.testTag("btn_sync_contacts")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = "Sync Contacts",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
 
                 IconButton(
                     onClick = { showAddDialog = true },
@@ -136,6 +183,78 @@ fun ContactsScreen(
                         contentDescription = "Add Contact",
                         tint = MaterialTheme.colorScheme.primary
                     )
+                }
+            }
+
+            // Contacts Permission Prompt Card if READ_CONTACTS not yet granted
+            if (!permissionStatus.hasContacts) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .testTag("card_contacts_permission"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Contacts,
+                                contentDescription = "Contacts Permission",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (language == AppLanguage.BENGALI)
+                                    "কন্টাক্ট পারমিশন প্রয়োজন"
+                                else
+                                    "Sync Device Contacts",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = if (language == AppLanguage.BENGALI)
+                                    "ফোনবুক থেকে কন্টাক্ট আনতে এবং T9 সার্চ করতে অনুমতি দিন"
+                                else
+                                    "Allow Contacts access to import phonebook & power T9 search",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                                lineHeight = 14.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { requestContactsPermission() },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("btn_grant_contacts_permission")
+                        ) {
+                            Text(
+                                text = if (language == AppLanguage.BENGALI) "অনুমতি দিন" else "Allow",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
 
@@ -269,6 +388,27 @@ fun ContactsScreen(
                     }
                 }
             }
+        )
+    }
+
+    if (showContactsRationaleDialog) {
+        PermissionRationaleDialog(
+            language = language,
+            status = permissionStatus.copy(hasCallLog = true, hasPhoneState = true, hasCallPhone = true),
+            isPermanentlyDenied = isPermanentlyDenied,
+            onGrantPermissions = {
+                showContactsRationaleDialog = false
+                val missing = PermissionHelper.getMissingPermissions(context, contactsPermissions)
+                if (missing.isNotEmpty()) {
+                    PermissionHelper.markPermissionsPrompted(context, missing)
+                    contactsPermissionLauncher.launch(missing.toTypedArray())
+                }
+            },
+            onOpenSettings = {
+                showContactsRationaleDialog = false
+                context.startActivity(PermissionHelper.createAppSettingsIntent(context))
+            },
+            onDismiss = { showContactsRationaleDialog = false }
         )
     }
 }

@@ -5,6 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.BlockedNumberEntity
 import com.example.data.model.CallLogEntity
@@ -23,17 +24,27 @@ import kotlinx.coroutines.launch
         SpamReportEntity::class,
         BlockedNumberEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun appDao(): AppDao
+    abstract fun callLogDao(): CallLogDao
 
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE call_logs ADD COLUMN systemCallId INTEGER")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_call_logs_timestamp ON call_logs(timestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_call_logs_number ON call_logs(number)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_call_logs_systemCallId ON call_logs(systemCallId)")
+            }
+        }
 
         fun getInstance(context: Context, scope: CoroutineScope): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -42,6 +53,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "smart_dialer_db"
                 )
+                    .addMigrations(MIGRATION_1_2)
+                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .addCallback(object : Callback() {
                         override fun onCreate(db: SupportSQLiteDatabase) {
                             super.onCreate(db)

@@ -1,6 +1,7 @@
 package com.example.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 enum class CallType {
@@ -41,7 +42,14 @@ data class ContactEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "call_logs")
+@Entity(
+    tableName = "call_logs",
+    indices = [
+        Index(value = ["timestamp"]),
+        Index(value = ["number"]),
+        Index(value = ["systemCallId"])
+    ]
+)
 data class CallLogEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -54,7 +62,8 @@ data class CallLogEntity(
     val location: String = "",
     val isSpam: Boolean = false,
     val spamCategory: String = "",
-    val simSlot: Int = 1
+    val simSlot: Int = 1,
+    val systemCallId: Long? = null
 )
 
 @Entity(tableName = "spam_registry")

@@ -20,11 +20,16 @@ import com.example.data.model.ContactEntity
 import com.example.data.model.SpamReportEntity
 import com.example.data.model.SpamRiskLevel
 import com.example.data.repository.DialerRepository
-import com.example.data.repository.NumberLookupResult
 import com.example.service.CallStateEvent
 import com.example.service.CallStateManager
 import com.example.util.CarrierLookupEngine
+import com.example.util.DefaultDialerManager
+import com.example.util.DialerPermissionsStatus
+import com.example.util.PermissionHelper
+import com.example.util.SimManager
+import com.example.util.SimSlotInfo
 import com.example.util.T9SearchEngine
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +37,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -71,46 +78,23 @@ data class ActiveCallState(
     val durationSeconds: Long = 0,
     val isMuted: Boolean = false,
     val isSpeakerOn: Boolean = false,
-    val isOnHold: Boolean = false
+    val isOnHold: Boolean = false,
+    val simSlot: Int = 1,
+    val simCarrierLabel: String = "",
+    val isSystemCall: Boolean = false
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class DialerViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository: DialerRepository
+    private val database: AppDatabase = AppDatabase.getInstance(application, viewModelScope)
+    private val repository: DialerRepository = DialerRepository(
+        appDao = database.appDao(),
+        context = application,
+        callLogDao = database.callLogDao()
+    )
     private var toneGenerator: ToneGenerator? = null
     private var vibrator: Vibrator? = null
-
-    init {
-        val db = AppDatabase.getInstance(application, viewModelScope)
-        repository = DialerRepository(db.appDao(), application)
-        try {
-            toneGenerator = ToneGenerator(AudioManager.STREAM_DTMF, 60)
-        } catch (_: Exception) {
-            toneGenerator = null
-        }
-        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vibratorManager = application.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-            vibratorManager?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            application.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        }
-
-        viewModelScope.launch {
-            repository.syncDeviceContactsIfAvailable()
-        }
-
-        viewModelScope.launch {
-            CallStateManager.events.collect { event ->
-                when (event) {
-                    is CallStateEvent.IncomingRinging -> handleIncomingCall(event.number)
-                    is CallStateEvent.OutgoingDialing -> { /* Outgoing call started */ }
-                    is CallStateEvent.CallAnswered -> onCallAnswered()
-                    is CallStateEvent.CallEnded -> endActiveCall()
-                }
-            }
-        }
-    }
 
     // UI Navigation & Language
     private val _currentTab = MutableStateFlow(AppTab.KEYPAD)
@@ -118,6 +102,28 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _currentLanguage = MutableStateFlow(AppLanguage.ENGLISH)
     val currentLanguage: StateFlow<AppLanguage> = _currentLanguage.asStateFlow()
+
+    // Dual-SIM State
+    private val _availableSims = MutableStateFlow<List<SimSlotInfo>>(emptyList())
+    val availableSims: StateFlow<List<SimSlotInfo>> = _availableSims.asStateFlow()
+
+    private val _selectedSimSlot = MutableStateFlow(1)
+    val selectedSimSlot: StateFlow<Int> = _selectedSimSlot.asStateFlow()
+
+    private val _hasPhonePermission = MutableStateFlow(false)
+    val hasPhonePermission: StateFlow<Boolean> = _hasPhonePermission.asStateFlow()
+
+    private val _hasCallLogPermission = MutableStateFlow(false)
+    val hasCallLogPermission: StateFlow<Boolean> = _hasCallLogPermission.asStateFlow()
+
+    private val _hasContactsPermission = MutableStateFlow(false)
+    val hasContactsPermission: StateFlow<Boolean> = _hasContactsPermission.asStateFlow()
+
+    private val _permissionStatus = MutableStateFlow(PermissionHelper.checkStatus(application))
+    val permissionStatus: StateFlow<DialerPermissionsStatus> = _permissionStatus.asStateFlow()
+
+    private val _isSyncingCallLogs = MutableStateFlow(false)
+    val isSyncingCallLogs: StateFlow<Boolean> = _isSyncingCallLogs.asStateFlow()
 
     // Keypad Input & T9 Matching
     private val _inputNumber = MutableStateFlow("")
@@ -174,6 +180,83 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         emptyList()
     )
 
+    init {
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_DTMF, 60)
+        } catch (_: Exception) {
+            toneGenerator = null
+        }
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = application.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+            vibratorManager?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            application.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+
+        viewModelScope.launch {
+            refreshSimsAndSyncHistory(showFeedback = false)
+        }
+
+        viewModelScope.launch {
+            CallStateManager.events.collect { event ->
+                when (event) {
+                    is CallStateEvent.IncomingRinging -> {
+                        if (!_activeCallState.value.isActive && !_activeCallState.value.isIncomingRinging) {
+                            handleIncomingCall(
+                                number = event.number,
+                                simSlot = event.simSlot,
+                                callerDisplayName = event.callerDisplayName
+                            )
+                        }
+                    }
+                    is CallStateEvent.OutgoingDialing -> {
+                        if (_activeCallState.value.isActive) {
+                            val simCarrier = _availableSims.value
+                                .firstOrNull { it.slotNumber == event.simSlot }
+                                ?.carrierName
+                                .orEmpty()
+                            _activeCallState.value = _activeCallState.value.copy(
+                                simSlot = event.simSlot,
+                                simCarrierLabel = simCarrier.ifBlank { _activeCallState.value.simCarrierLabel },
+                                isSystemCall = true
+                            )
+                        }
+                    }
+                    is CallStateEvent.CallAnswered -> onCallAnswered()
+                    is CallStateEvent.CallEnded -> {
+                        if (_activeCallState.value.isActive && _activeCallState.value.isCallAnswered) {
+                            endActiveCall()
+                        } else if (_activeCallState.value.isActive && _activeCallState.value.isSystemCall) {
+                            dismissCall()
+                            scheduleRealCallLogSync()
+                        } else if (_activeCallState.value.isIncomingRinging) {
+                            dismissCall()
+                            scheduleRealCallLogSync()
+                        }
+                    }
+                    is CallStateEvent.CallHistoryRefreshNeeded -> {
+                        scheduleRealCallLogSync()
+                    }
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            _hasCallLogPermission
+                .flatMapLatest { granted ->
+                    if (granted) {
+                        repository.callHistoryRepository?.observeSystemCallLogChanges() ?: emptyFlow()
+                    } else {
+                        emptyFlow()
+                    }
+                }
+                .collect {
+                    scheduleRealCallLogSync()
+                }
+        }
+    }
+
     // T9 search results combining keypad input and all contacts
     val t9Matches: StateFlow<List<T9SearchEngine.T9MatchResult>> = combine(
         _inputNumber,
@@ -202,8 +285,9 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
             }
             val matchesSearch = if (search.isBlank()) true else {
                 log.number.contains(search, ignoreCase = true) ||
-                        log.cachedName.contains(search, ignoreCase = true) ||
-                        log.carrier.contains(search, ignoreCase = true)
+                    log.cachedName.contains(search, ignoreCase = true) ||
+                    log.carrier.contains(search, ignoreCase = true) ||
+                    "sim ${log.simSlot}".contains(search, ignoreCase = true)
             }
             matchesFilter && matchesSearch
         }
@@ -222,6 +306,93 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
             AppLanguage.BENGALI
         } else {
             AppLanguage.ENGLISH
+        }
+    }
+
+    fun selectSimSlot(slotNumber: Int) {
+        _selectedSimSlot.value = slotNumber.coerceIn(1, 2)
+    }
+
+    fun refreshSimsAndSyncHistory(showFeedback: Boolean = false) {
+        val app = getApplication<Application>()
+        val status = PermissionHelper.checkStatus(app)
+        _permissionStatus.value = status
+        _hasPhonePermission.value = status.hasPhoneState
+        _hasCallLogPermission.value = status.hasCallLog
+        _hasContactsPermission.value = status.hasContacts
+
+        val detectedSims = SimManager.getAvailableSims(app)
+        _availableSims.value = detectedSims
+        if (detectedSims.isNotEmpty() && detectedSims.none { it.slotNumber == _selectedSimSlot.value }) {
+            _selectedSimSlot.value = detectedSims.first().slotNumber
+        }
+
+        viewModelScope.launch {
+            _isSyncingCallLogs.value = true
+            try {
+                repository.syncDeviceContactsIfAvailable()
+                val importedCount = repository.syncDeviceCallLogsIfAvailable()
+                if (showFeedback) {
+                    val msg = if (_currentLanguage.value == AppLanguage.BENGALI) {
+                        if (importedCount > 0) {
+                            "রিয়েল কল হিস্টরি থেকে $importedCount টি কল ব্যাকআপ সম্পন্ন হয়েছে"
+                        } else if (!status.hasCallLog) {
+                            "কল হিস্টরি আনতে Call Log পারমিশন অনুমতি দিন"
+                        } else {
+                            "সমস্ত রিয়েল কল হিস্টরি ইতিমধ্যে ব্যাকআপ করা আছে"
+                        }
+                    } else {
+                        if (importedCount > 0) {
+                            "Backed up $importedCount real calls from device history"
+                        } else if (!status.hasCallLog) {
+                            "Grant Call Log permission to backup device call history"
+                        } else {
+                            "Device call history is already up to date"
+                        }
+                    }
+                    showSnackbar(msg)
+                }
+            } finally {
+                _isSyncingCallLogs.value = false
+            }
+        }
+    }
+
+    fun syncContactsNow(showFeedback: Boolean = true) {
+        val app = getApplication<Application>()
+        val status = PermissionHelper.checkStatus(app)
+        _permissionStatus.value = status
+        _hasContactsPermission.value = status.hasContacts
+
+        viewModelScope.launch {
+            val importedContacts = repository.syncDeviceContactsIfAvailable()
+            if (showFeedback) {
+                val msg = if (_currentLanguage.value == AppLanguage.BENGALI) {
+                    if (!status.hasContacts) {
+                        "ফোনের কন্টাক্ট সিঙ্ক করতে Contacts পারমিশন দিন"
+                    } else if (importedContacts > 0) {
+                        "ফোনবুক থেকে $importedContacts টি কন্টাক্ট ইমপোর্ট হয়েছে"
+                    } else {
+                        "সব কন্টাক্ট ইতিমধ্যে সিঙ্ক করা আছে"
+                    }
+                } else {
+                    if (!status.hasContacts) {
+                        "Grant Contacts permission to sync your phonebook"
+                    } else if (importedContacts > 0) {
+                        "Imported $importedContacts contacts from device"
+                    } else {
+                        "All device contacts are already synced"
+                    }
+                }
+                showSnackbar(msg)
+            }
+        }
+    }
+
+    private fun scheduleRealCallLogSync() {
+        viewModelScope.launch {
+            delay(700)
+            repository.syncDeviceCallLogsIfAvailable()
         }
     }
 
@@ -297,17 +468,52 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         } catch (_: Exception) {}
     }
 
-    // Call Actions
-    fun startCall(rawNumber: String) {
+    // Call Actions with SIM 1 / SIM 2 selection
+    fun startCall(rawNumber: String, overrideSimSlot: Int? = null) {
         if (rawNumber.isBlank()) return
         val number = rawNumber.trim()
+        val app = getApplication<Application>()
+
+        val targetSlot = overrideSimSlot ?: _selectedSimSlot.value
+        val selectedSim = _availableSims.value.firstOrNull { it.slotNumber == targetSlot }
+            ?: _availableSims.value.firstOrNull()
+
         viewModelScope.launch {
             val lookup = repository.lookupNumber(number)
             if (lookup.isBlocked) {
-                showSnackbar("Call cannot be placed: Number is in blocklist")
+                showSnackbar(
+                    if (_currentLanguage.value == AppLanguage.BENGALI)
+                        "ব্লকলিস্টে থাকায় এই নাম্বারে কল করা যাচ্ছে না"
+                    else
+                        "Call cannot be placed: Number is in blocklist"
+                )
                 return@launch
             }
-            // Launch active call in dialing/ringing state first (seconds only count once answered/received)
+
+            val isDefaultDialer = DefaultDialerManager.isDefaultDialer(app)
+            val placedViaSystem = SimManager.placeOutgoingCall(app, number, selectedSim)
+
+            val simSlot = selectedSim?.slotNumber ?: targetSlot
+            val simCarrier = selectedSim?.carrierName.orEmpty()
+
+            if (placedViaSystem && !isDefaultDialer) {
+                // External OS dialer handles the call; record locally if CallLog access is unavailable
+                if (!repository.hasCallLogPermission()) {
+                    repository.logCall(
+                        number = number,
+                        cachedName = lookup.displayName,
+                        type = CallType.OUTGOING,
+                        durationSeconds = 0,
+                        carrier = lookup.carrierName,
+                        location = lookup.location,
+                        isSpam = lookup.isSpam,
+                        spamCategory = lookup.spamReport?.category ?: "",
+                        simSlot = simSlot
+                    )
+                }
+                return@launch
+            }
+
             _activeCallState.value = ActiveCallState(
                 isActive = true,
                 isIncomingRinging = false,
@@ -320,38 +526,46 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 spamCategory = lookup.spamReport?.category ?: "",
                 spamReportsCount = lookup.spamReport?.reportsCount ?: 0,
                 riskLevel = lookup.riskLevel,
-                durationSeconds = 0
+                durationSeconds = 0,
+                simSlot = simSlot,
+                simCarrierLabel = simCarrier,
+                isSystemCall = placedViaSystem && isDefaultDialer
             )
 
-            // Simulate call ringing for ~2.5 seconds, then receiver answers and seconds start counting!
-            viewModelScope.launch {
-                delay(2500)
-                if (_activeCallState.value.isActive && !_activeCallState.value.isCallAnswered) {
-                    onCallAnswered()
+            // Only run simulated 2.5s answer when NOT in a real Android Telecom call (e.g. emulator/sandbox)
+            if (!(placedViaSystem && isDefaultDialer)) {
+                viewModelScope.launch {
+                    delay(2500)
+                    if (_activeCallState.value.isActive && !_activeCallState.value.isCallAnswered) {
+                        onCallAnswered()
+                    }
                 }
-            }
-
-            // Also attempt system intent to dial if running on physical device
-            try {
-                val intent = Intent(Intent.ACTION_CALL).apply {
-                    data = Uri.parse("tel:${Uri.encode(number)}")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                getApplication<Application>().startActivity(intent)
-            } catch (_: Exception) {
-                // In sandbox or no CALL_PHONE permission granted yet; our in-app simulation takes over!
             }
         }
     }
 
-    fun handleIncomingCall(number: String) {
+    fun handleIncomingCall(
+        number: String,
+        simSlot: Int = 1,
+        callerDisplayName: String = ""
+    ) {
         viewModelScope.launch {
             val lookup = repository.lookupNumber(number)
+            val resolvedName = if (lookup.isKnownContact || lookup.isSpam) {
+                lookup.displayName
+            } else {
+                callerDisplayName.ifBlank { lookup.displayName }
+            }
+            val simCarrier = _availableSims.value
+                .firstOrNull { it.slotNumber == simSlot }
+                ?.carrierName
+                .orEmpty()
+
             _activeCallState.value = ActiveCallState(
                 isActive = false,
                 isIncomingRinging = true,
                 isCallAnswered = false,
-                callerName = lookup.displayName,
+                callerName = resolvedName,
                 number = number,
                 carrier = lookup.carrierName,
                 location = lookup.location,
@@ -359,7 +573,10 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 spamCategory = lookup.spamReport?.category ?: "",
                 spamReportsCount = lookup.spamReport?.reportsCount ?: 0,
                 riskLevel = lookup.riskLevel,
-                durationSeconds = 0
+                durationSeconds = 0,
+                simSlot = simSlot.coerceIn(1, 2),
+                simCarrierLabel = simCarrier,
+                isSystemCall = true
             )
         }
     }
@@ -373,6 +590,8 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         reportsCount: Int = 1420
     ) {
         val carrier = CarrierLookupEngine.lookup(number)
+        val slot = _selectedSimSlot.value
+        val simCarrier = _availableSims.value.firstOrNull { it.slotNumber == slot }?.carrierName.orEmpty()
         _activeCallState.value = ActiveCallState(
             isActive = false,
             isIncomingRinging = true,
@@ -385,7 +604,10 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
             spamCategory = category,
             spamReportsCount = reportsCount,
             riskLevel = if (isSpam) SpamRiskLevel.HIGH_RISK else SpamRiskLevel.SAFE,
-            durationSeconds = 0
+            durationSeconds = 0,
+            simSlot = slot,
+            simCarrierLabel = simCarrier,
+            isSystemCall = false
         )
     }
 
@@ -401,6 +623,7 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onCallAnswered() {
         val current = _activeCallState.value
+        if (current.isCallAnswered) return
         _activeCallState.value = current.copy(
             isActive = true,
             isIncomingRinging = false,
@@ -417,19 +640,24 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
     fun declineIncomingCall() {
         val current = _activeCallState.value
         viewModelScope.launch {
-            repository.logCall(
-                number = current.number,
-                cachedName = current.callerName,
-                type = if (current.isSpam) CallType.REJECTED else CallType.MISSED,
-                durationSeconds = 0,
-                carrier = current.carrier,
-                location = current.location,
-                isSpam = current.isSpam,
-                spamCategory = current.spamCategory
-            )
+            if (!current.isSystemCall || !repository.hasCallLogPermission()) {
+                repository.logCall(
+                    number = current.number,
+                    cachedName = current.callerName,
+                    type = if (current.isSpam) CallType.REJECTED else CallType.MISSED,
+                    durationSeconds = 0,
+                    carrier = current.carrier,
+                    location = current.location,
+                    isSpam = current.isSpam,
+                    spamCategory = current.spamCategory,
+                    simSlot = current.simSlot
+                )
+            } else {
+                scheduleRealCallLogSync()
+            }
         }
         dismissCall()
-        showSnackbar("Call declined")
+        showSnackbar(if (_currentLanguage.value == AppLanguage.BENGALI) "কল কাটা হয়েছে" else "Call declined")
     }
 
     fun blockAndRejectIncomingCall() {
@@ -441,16 +669,21 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
                 category = if (current.spamCategory.isNotEmpty()) current.spamCategory else "Scammer",
                 notes = "Blocked from live Caller ID popup"
             )
-            repository.logCall(
-                number = current.number,
-                cachedName = current.callerName,
-                type = CallType.BLOCKED,
-                durationSeconds = 0,
-                carrier = current.carrier,
-                location = current.location,
-                isSpam = true,
-                spamCategory = current.spamCategory
-            )
+            if (!current.isSystemCall || !repository.hasCallLogPermission()) {
+                repository.logCall(
+                    number = current.number,
+                    cachedName = current.callerName,
+                    type = CallType.BLOCKED,
+                    durationSeconds = 0,
+                    carrier = current.carrier,
+                    location = current.location,
+                    isSpam = true,
+                    spamCategory = current.spamCategory,
+                    simSlot = current.simSlot
+                )
+            } else {
+                scheduleRealCallLogSync()
+            }
         }
         dismissCall()
         showSnackbar("${current.number} blocked and reported as spam!")
@@ -460,19 +693,41 @@ class DialerViewModel(application: Application) : AndroidViewModel(application) 
         val current = _activeCallState.value
         val duration = current.durationSeconds
         viewModelScope.launch {
-            repository.logCall(
-                number = current.number,
-                cachedName = current.callerName,
-                type = if (current.durationSeconds > 0) CallType.OUTGOING else CallType.MISSED,
-                durationSeconds = duration,
-                carrier = current.carrier,
-                location = current.location,
-                isSpam = current.isSpam,
-                spamCategory = current.spamCategory
-            )
+            if (current.isSystemCall && repository.hasCallLogPermission()) {
+                delay(700)
+                val synced = repository.syncDeviceCallLogsIfAvailable()
+                if (synced == 0 && current.number.isNotBlank()) {
+                    repository.logCall(
+                        number = current.number,
+                        cachedName = current.callerName,
+                        type = if (duration > 0) CallType.OUTGOING else CallType.MISSED,
+                        durationSeconds = duration,
+                        carrier = current.carrier,
+                        location = current.location,
+                        isSpam = current.isSpam,
+                        spamCategory = current.spamCategory,
+                        simSlot = current.simSlot
+                    )
+                }
+            } else if (current.number.isNotBlank()) {
+                repository.logCall(
+                    number = current.number,
+                    cachedName = current.callerName,
+                    type = if (duration > 0) CallType.OUTGOING else CallType.MISSED,
+                    durationSeconds = duration,
+                    carrier = current.carrier,
+                    location = current.location,
+                    isSpam = current.isSpam,
+                    spamCategory = current.spamCategory,
+                    simSlot = current.simSlot
+                )
+            }
         }
         dismissCall()
-        showSnackbar("Call ended (${duration}s)")
+        showSnackbar(
+            if (_currentLanguage.value == AppLanguage.BENGALI) "কল শেষ হয়েছে (${duration}s)"
+            else "Call ended (${duration}s)"
+        )
     }
 
     private fun dismissCall() {

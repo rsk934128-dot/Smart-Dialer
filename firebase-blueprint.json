@@ -1,0 +1,266 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Authenticated user profile and cloud backup metadata for Smart Dialer.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's display name."
+        },
+        "email": {
+          "type": "string",
+          "description": "User's email address (PII restricted to owner)."
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Optional avatar URL."
+        },
+        "backedUpLogsCount": {
+          "type": "integer",
+          "description": "Total call logs backed up to Firestore."
+        },
+        "backedUpContactsCount": {
+          "type": "integer",
+          "description": "Total contacts backed up to Firestore."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of profile creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of latest update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": ["userId", "displayName", "createdAt", "updatedAt"]
+    },
+    "CloudCallLog": {
+      "title": "Cloud Call Log",
+      "description": "Backed-up device call log entry with dual-SIM slot and carrier metadata.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "number": {
+          "type": "string",
+          "description": "Phone number of the call."
+        },
+        "cachedName": {
+          "type": "string",
+          "description": "Contact or caller name if available."
+        },
+        "callType": {
+          "type": "string",
+          "enum": ["INCOMING", "OUTGOING", "MISSED", "REJECTED", "BLOCKED"],
+          "description": "Call direction / outcome type."
+        },
+        "callTimestampMs": {
+          "type": "integer",
+          "description": "Epoch millisecond timestamp of the real call."
+        },
+        "durationSeconds": {
+          "type": "integer",
+          "description": "Call duration in seconds."
+        },
+        "carrier": {
+          "type": "string",
+          "description": "Detected mobile operator name."
+        },
+        "location": {
+          "type": "string",
+          "description": "Operator region or country."
+        },
+        "spamFlag": {
+          "type": "boolean",
+          "description": "Whether the caller was flagged as spam."
+        },
+        "spamCategory": {
+          "type": "string",
+          "description": "Category label if flagged as spam."
+        },
+        "simSlot": {
+          "type": "integer",
+          "description": "SIM slot index (1 for SIM 1, 2 for SIM 2)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": ["userId", "number", "callType", "callTimestampMs", "durationSeconds", "simSlot", "spamFlag", "createdAt", "updatedAt"]
+    },
+    "CloudContact": {
+      "title": "Cloud Contact",
+      "description": "Backed-up user phonebook contact entry.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "name": {
+          "type": "string",
+          "description": "Contact display name."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Contact phone number."
+        },
+        "email": {
+          "type": "string",
+          "description": "Optional email address."
+        },
+        "company": {
+          "type": "string",
+          "description": "Optional organization or company."
+        },
+        "label": {
+          "type": "string",
+          "description": "Contact label (e.g., Mobile, Work, Device)."
+        },
+        "favorite": {
+          "type": "boolean",
+          "description": "Whether contact is starred/favorite."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional contact notes."
+        },
+        "avatarColorIndex": {
+          "type": "integer",
+          "description": "Deterministic avatar color index."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": ["userId", "name", "phoneNumber", "favorite", "avatarColorIndex", "createdAt", "updatedAt"]
+    },
+    "CloudBlockedNumber": {
+      "title": "Cloud Blocked Number",
+      "description": "User-blocked phone number backed up across devices.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "number": {
+          "type": "string",
+          "description": "Blocked phone number."
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional blocked caller label."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason for blocking."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": ["userId", "number", "reason", "createdAt", "updatedAt"]
+    },
+    "CloudSpamReport": {
+      "title": "Cloud Spam Report",
+      "description": "User-submitted spam classification entry synced across the user's devices.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "number": {
+          "type": "string",
+          "description": "Reported phone number."
+        },
+        "reportedName": {
+          "type": "string",
+          "description": "Caller name or alias reported."
+        },
+        "category": {
+          "type": "string",
+          "description": "Spam category (e.g., Scammer, Telemarketer)."
+        },
+        "reportsCount": {
+          "type": "integer",
+          "description": "Number of spam flags recorded."
+        },
+        "riskLevel": {
+          "type": "string",
+          "enum": ["SAFE", "SUSPICIOUS", "HIGH_RISK"],
+          "description": "Calculated risk level."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional report notes."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp on update (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": ["userId", "number", "reportedName", "category", "reportsCount", "riskLevel", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-isolated user profile and backup stats."
+    },
+    "/users/{userId}/call_logs/{logId}": {
+      "schema": { "$ref": "#/entities/CloudCallLog" },
+      "description": "Backed-up device call logs belonging to {userId}."
+    },
+    "/users/{userId}/contacts/{contactId}": {
+      "schema": { "$ref": "#/entities/CloudContact" },
+      "description": "Backed-up contacts belonging to {userId}."
+    },
+    "/users/{userId}/blocked_numbers/{blockId}": {
+      "schema": { "$ref": "#/entities/CloudBlockedNumber" },
+      "description": "User-managed call blocklist belonging to {userId}."
+    },
+    "/users/{userId}/spam_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/CloudSpamReport" },
+      "description": "User-reported spam registry belonging to {userId}."
+    }
+  }
+}

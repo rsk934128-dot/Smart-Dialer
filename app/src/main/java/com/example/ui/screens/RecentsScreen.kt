@@ -1,8 +1,11 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,12 +23,14 @@ import androidx.compose.material.icons.automirrored.filled.PhoneMissed
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ClearAll
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,7 +46,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -50,10 +54,12 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.CallLogEntity
 import com.example.ui.components.CallLogCard
 import com.example.ui.components.FilterChipRow
+import com.example.ui.components.PermissionRationaleDialog
 import com.example.ui.theme.CallGreen
 import com.example.ui.theme.SpamRed
 import com.example.ui.viewmodel.AppLanguage
 import com.example.ui.viewmodel.DialerViewModel
+import com.example.util.PermissionHelper
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -61,16 +67,29 @@ import java.util.Locale
 @Composable
 fun RecentsScreen(
     viewModel: DialerViewModel,
+    onOpenCloudSync: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val logs by viewModel.filteredCallLogs.collectAsState()
     val selectedFilter by viewModel.recentsFilter.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val language by viewModel.currentLanguage.collectAsState()
+    val hasCallLogPermission by viewModel.hasCallLogPermission.collectAsState()
+    val permissionStatus by viewModel.permissionStatus.collectAsState()
+    val isSyncing by viewModel.isSyncingCallLogs.collectAsState()
     val context = LocalContext.current
 
     var selectedLogForDetails by remember { mutableStateOf<CallLogEntity?>(null) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
+    var showCallLogRationaleDialog by remember { mutableStateOf(false) }
+    var isCallLogPermDenied by remember { mutableStateOf(false) }
+
+    val callLogPermissions = remember { PermissionHelper.callLogAndPhonePermissionsArray() }
+    val callLogPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        viewModel.refreshSimsAndSyncHistory(showFeedback = true)
+    }
 
     Column(
         modifier = modifier
@@ -121,6 +140,117 @@ fun RecentsScreen(
             }
         }
 
+        // Real Call History Backup / Sync Card
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = "Backup Call Log",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = if (language == AppLanguage.BENGALI)
+                                "রিয়েল কল হিস্টরি ব্যাকআপ"
+                            else
+                                "Real Call History Backup",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) {
+                                if (hasCallLogPermission) "ফোনের কল লগ থেকে নাম্বার অ্যাপে আনুন"
+                                else "ব্যাকআপের জন্য Call Log পারমিশন দিন"
+                            } else {
+                                if (hasCallLogPermission) "Import numbers & SIM info from device log"
+                                else "Grant Call Log permission to backup history"
+                            },
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Button(
+                    onClick = {
+                        if (hasCallLogPermission) {
+                            viewModel.refreshSimsAndSyncHistory(showFeedback = true)
+                        } else {
+                            val missing = PermissionHelper.getMissingPermissions(context, callLogPermissions)
+                            if (PermissionHelper.isPermanentlyDenied(context, missing)) {
+                                isCallLogPermDenied = true
+                                showCallLogRationaleDialog = true
+                            } else {
+                                PermissionHelper.markPermissionsPrompted(context, missing)
+                                callLogPermissionLauncher.launch(missing.toTypedArray())
+                            }
+                        }
+                    },
+                    enabled = !isSyncing,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("btn_sync_real_call_log")
+                ) {
+                    if (isSyncing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Sync,
+                            contentDescription = "Sync Real Call Log",
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (language == AppLanguage.BENGALI) "ব্যাকআপ আনুন" else "Sync Now",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                if (onOpenCloudSync != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    OutlinedButton(
+                        onClick = onOpenCloudSync,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("btn_recents_cloud_sync")
+                    ) {
+                        Text(
+                            text = if (language == AppLanguage.BENGALI) "ক্লাউড" else "Cloud",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
         // Filter chips row
         FilterChipRow(
             selectedFilter = selectedFilter,
@@ -162,7 +292,7 @@ fun RecentsScreen(
                 items(logs, key = { it.id }) { log ->
                     CallLogCard(
                         callLog = log,
-                        onCallClick = { viewModel.startCall(log.number) },
+                        onCallClick = { viewModel.startCall(log.number, overrideSimSlot = log.simSlot) },
                         onDetailsClick = { selectedLogForDetails = log }
                     )
                 }
@@ -186,7 +316,7 @@ fun RecentsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Number: ${log.number}", fontSize = 14.sp)
-                    Text("Type: ${log.type.name}", fontSize = 14.sp)
+                    Text("Type: ${log.type.name} • SIM ${log.simSlot}", fontSize = 14.sp)
                     Text(
                         "Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(log.timestamp))}",
                         fontSize = 13.sp,
@@ -219,14 +349,14 @@ fun RecentsScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            viewModel.startCall(log.number)
+                            viewModel.startCall(log.number, overrideSimSlot = log.simSlot)
                             selectedLogForDetails = null
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = CallGreen)
                     ) {
                         Icon(Icons.Default.Call, contentDescription = "Call", modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Call")
+                        Text("Call (SIM ${log.simSlot})")
                     }
 
                     OutlinedButton(
@@ -292,6 +422,27 @@ fun RecentsScreen(
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    if (showCallLogRationaleDialog) {
+        PermissionRationaleDialog(
+            language = language,
+            status = permissionStatus.copy(hasContacts = true),
+            isPermanentlyDenied = isCallLogPermDenied,
+            onGrantPermissions = {
+                showCallLogRationaleDialog = false
+                val missing = PermissionHelper.getMissingPermissions(context, callLogPermissions)
+                if (missing.isNotEmpty()) {
+                    PermissionHelper.markPermissionsPrompted(context, missing)
+                    callLogPermissionLauncher.launch(missing.toTypedArray())
+                }
+            },
+            onOpenSettings = {
+                showCallLogRationaleDialog = false
+                context.startActivity(PermissionHelper.createAppSettingsIntent(context))
+            },
+            onDismiss = { showCallLogRationaleDialog = false }
         )
     }
 }
