@@ -84,6 +84,31 @@ jobs:
               -dname "CN=Android Debug, O=Android, C=US"
           fi
 
+      - name: Setup & Verify Firebase Config (google-services.json)
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          GOOGLE_SERVICES_JSON_RAW: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          GS_PATH="${{ github.workspace }}/app/google-services.json"
+          if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "Decoding GOOGLE_SERVICES_JSON_BASE64 secret to app/google-services.json..."
+            printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > "$GS_PATH"
+          elif [ -n "$GOOGLE_SERVICES_JSON_RAW" ]; then
+            echo "Writing GOOGLE_SERVICES_JSON secret to app/google-services.json..."
+            printf '%s' "$GOOGLE_SERVICES_JSON_RAW" > "$GS_PATH"
+          fi
+
+          if [ ! -f "$GS_PATH" ]; then
+            echo "::error::Missing app/google-services.json. Commit app/google-services.json or add GOOGLE_SERVICES_JSON / GOOGLE_SERVICES_JSON_BASE64 in GitHub Repository Secrets."
+            exit 1
+          fi
+
+          if ! grep -q '"client_type"[[:space:]]*:[[:space:]]*3' "$GS_PATH"; then
+            echo "::error::app/google-services.json is missing OAuth Web Client (client_type: 3) required to generate R.string.default_web_client_id."
+            exit 1
+          fi
+          echo "Verified app/google-services.json with OAuth Web Client (client_type: 3)."
+
       - name: Ensure Gradle Wrapper Exists and is Executable
         run: |
           if [ ! -f "gradlew" ]; then
@@ -93,7 +118,7 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          ./gradlew testDebugUnitTest --continue || gradle testDebugUnitTest --continue || echo "Unit tests step finished (Robolectric SDK compatibility warning handled)"
+          ./gradlew testDebugUnitTest --no-build-cache --continue || gradle testDebugUnitTest --no-build-cache --continue || echo "Unit tests step finished (Robolectric SDK compatibility warning handled)"
 
       - name: Build APKs (Release and Debug)
         env:
@@ -102,9 +127,9 @@ jobs:
           KEY_PASSWORD: ${{ env.KEY_PASS }}
         run: |
           echo "Building Release APK..."
-          ./gradlew assembleRelease --stacktrace || gradle assembleRelease --stacktrace
+          ./gradlew assembleRelease --no-build-cache --stacktrace || gradle assembleRelease --no-build-cache --stacktrace
           echo "Building Debug APK..."
-          ./gradlew assembleDebug --stacktrace || gradle assembleDebug --stacktrace || echo "assembleDebug step completed with warning, proceeding with release APK"
+          ./gradlew assembleDebug --no-build-cache --stacktrace || gradle assembleDebug --no-build-cache --stacktrace || echo "assembleDebug step completed with warning, proceeding with release APK"
 
       - name: Prepare Release APK Artifacts
         run: |
